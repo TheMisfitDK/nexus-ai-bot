@@ -32,7 +32,7 @@ Built to deploy anywhere: Railway, Heroku, Render, Docker, or any VPS.
 | **OpenAI** | GPT-4o, GPT-4o-mini, o1, o1-mini | 💳 |
 | **Anthropic** | Claude Opus 4, Sonnet 4, Haiku 3.5 | 💳 |
 | **Google** | Gemini 2.0 Flash, Gemini 1.5 Pro, Gemma 2 | 🆓 |
-| **Groq** | LLaMA 3.3 70B, Mixtral 8x7B, Gemma2 9B | 🆓 |
+| **Grok** | LLaMA 3.3 70B, Mixtral 8x7B, Gemma2 9B | 🆓 |
 | **NVIDIA NIM** | LLaMA 3.1 405B, Nemotron 70B, Mistral Large | 🆓 |
 | **DeepSeek** | DeepSeek Chat, Reasoner, Coder | 💳 |
 | **xAI Grok** | Grok-2, Grok-2-Vision | 💳 |

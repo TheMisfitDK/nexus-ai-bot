@@ -1,61 +1,69 @@
-// src/utils/imageUtils.js
-const OpenAI = require('openai');
+// src/utils/imageUtils.js — Vision analysis
 const axios = require('axios');
 const config = require('../../config');
+const logger = require('./logger');
 
 async function analyzeImage(imageUrl, prompt, provider, model) {
-  // Vision via OpenAI-compatible API
-  const visionProviders = ['openai', 'grok', 'google'];
-  const useProvider = visionProviders.includes(provider) ? provider : 'openai';
+  // Vision-capable providers
+  const visionMap = {
+    openai: { apiKey: config.ai.providers.openai?.apiKey, model: 'gpt-4o' },
+    grok: { apiKey: config.ai.providers.grok?.apiKey, baseUrl: 'https://api.x.ai/v1', model: 'grok-2-vision-1212' },
+    google: null, // handled separately
+  };
 
-  const openai = new OpenAI({ apiKey: config.ai.providers[useProvider]?.apiKey });
-  const res = await openai.chat.completions.create({
-    model: useProvider === 'openai' ? 'gpt-4o' : model,
+  // Use Google vision if selected and configured
+  if (provider === 'google' && config.ai.providers.google?.apiKey) {
+    return await _googleVision(imageUrl, prompt);
+  }
+
+  // Find a configured vision provider
+  let useProvider = null;
+  if (visionMap[provider]?.apiKey) useProvider = provider;
+  else if (visionMap.openai?.apiKey) useProvider = 'openai';
+  else if (visionMap.grok?.apiKey) useProvider = 'grok';
+
+  if (!useProvider) {
+    // Fallback to Google
+    if (config.ai.providers.google?.apiKey) return await _googleVision(imageUrl, prompt);
+    throw new Error('No vision-capable provider configured. Add OPENAI_API_KEY or GOOGLE_AI_API_KEY.');
+  }
+
+  const { apiKey, baseUrl, model: vModel } = visionMap[useProvider];
+  const OpenAI = require('openai');
+  const client = new OpenAI({
+    apiKey,
+    ...(baseUrl ? { baseURL: baseUrl } : {}),
+  });
+
+  const res = await client.chat.completions.create({
+    model: vModel,
     messages: [{
       role: 'user',
       content: [
         { type: 'image_url', image_url: { url: imageUrl } },
-        { type: 'text', text: prompt },
+        { type: 'text', text: prompt || 'Describe this image in detail.' },
       ],
     }],
     max_tokens: 1024,
   });
-  return res.choices[0].message.content;
+  return res.choices[0]?.message?.content || 'Could not analyze image.';
 }
 
-async function generateImage(prompt) {
-  const openai = new OpenAI({ apiKey: config.ai.providers.openai?.apiKey });
-  const res = await openai.images.generate({
-    model: 'dall-e-3',
-    prompt,
-    n: 1,
-    size: '1024x1024',
-    response_format: 'b64_json',
-  });
-  return Buffer.from(res.data[0].b64_json, 'base64');
+async function _googleVision(imageUrl, prompt) {
+  const { GoogleGenerativeAI } = require('@google/generative-ai');
+  const genAI = new GoogleGenerativeAI(config.ai.providers.google.apiKey);
+  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+  // Fetch image as base64
+  const response = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 30000 });
+  const base64 = Buffer.from(response.data).toString('base64');
+  const mimeType = response.headers['content-type'] || 'image/jpeg';
+
+  const result = await model.generateContent([
+    { inlineData: { data: base64, mimeType } },
+    prompt || 'Describe this image in detail.',
+  ]);
+  return result.response.text();
 }
 
-module.exports = { analyzeImage, generateImage };
-
-// ─────────────────────────────────────────────────────────────
-// src/utils/audioUtils.js
-// (Appended here for single-file simplicity; split if needed)
-async function transcribeAudio(fileUrl) {
-  const axios = require('axios');
-  const FormData = require('form-data');
-  const OpenAI = require('openai');
-
-  const openai = new OpenAI({ apiKey: config.ai.providers.openai?.apiKey });
-  const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-  const { Readable } = require('stream');
-  const stream = Readable.from(Buffer.from(response.data));
-  stream.path = 'audio.ogg'; // Whisper needs a filename
-
-  const transcription = await openai.audio.transcriptions.create({
-    file: stream,
-    model: 'whisper-1',
-  });
-  return transcription.text;
-}
-
-module.exports.transcribeAudio = transcribeAudio;
+module.exports = { analyzeImage };

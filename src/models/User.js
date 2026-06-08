@@ -1,4 +1,4 @@
-// src/models/User.js — Owner-Controlled Authorization Framework
+// src/models/User.js
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
@@ -12,16 +12,6 @@ const userSchema = new mongoose.Schema({
   lastName: String,
   languageCode: { type: String, default: 'en' },
 
-  // ─── AUTHORIZATION FRAMEWORK ──────────────────────────────────
-  isOwner: { type: Boolean, default: false },
-  isAuthorized: { type: Boolean, default: false },
-  authorizedBy: String, // Owner's ID who authorized this user
-  authorizationDate: Date,
-
-  // Token Management
-  totalTokensUsed: { type: Number, default: 0 },
-  tokenLimit: { type: Number, default: null }, // null = unlimited (owner only)
-
   // AI Preferences
   aiProvider: { type: String, default: 'openai' },
   aiModel: { type: String, default: 'gpt-4o-mini' },
@@ -33,10 +23,13 @@ const userSchema = new mongoose.Schema({
   streamResponses: { type: Boolean, default: true },
   responseFormat: { type: String, enum: ['text', 'markdown', 'html'], default: 'markdown' },
 
-  // Usage & Analytics
+  // Usage & Limits
+  plan: { type: String, enum: ['free', 'pro', 'enterprise'], default: 'free' },
   dailyMessages: { type: Number, default: 0 },
   totalMessages: { type: Number, default: 0 },
+  totalTokensUsed: { type: Number, default: 0 },
   lastMessageDate: Date,
+  planExpiresAt: Date,
 
   // State
   isBlocked: { type: Boolean, default: false },
@@ -67,56 +60,28 @@ const userSchema = new mongoose.Schema({
   lastActiveAt: { type: Date, default: Date.now },
 }, { timestamps: true });
 
-// ─── AUTHORIZATION METHODS ───────────────────────────────────────
-
-/**
- * Check if user can use the bot service
- * Owner always has access; others need explicit authorization
- */
-userSchema.methods.canUseService = function () {
-  if (this.isOwner) return true;
-  if (this.isBanned) return false;
-  return this.isAuthorized;
+// Reset daily count if new day
+userSchema.methods.checkAndResetDaily = function () {
+  const now = new Date();
+  const last = this.lastMessageDate;
+  if (!last || now.toDateString() !== last.toDateString()) {
+    this.dailyMessages = 0;
+    this.lastMessageDate = now;
+  }
 };
 
-/**
- * Check if user has tokens remaining
- * Owner has infinite tokens; authorized users have limits
- */
-userSchema.methods.hasTokensRemaining = function () {
-  if (this.isOwner) return true; // Owner has infinite tokens
-  if (!this.tokenLimit) return true; // No limit set = unlimited
-  return this.totalTokensUsed < this.tokenLimit;
+userSchema.methods.canSendMessage = function (limits) {
+  this.checkAndResetDaily();
+  const limit = this.plan === 'free' ? limits.freeDailyMessages :
+    this.plan === 'pro' ? limits.proDailyMessages : Infinity;
+  return this.dailyMessages < limit;
 };
 
-/**
- * Get remaining tokens for user
- */
-userSchema.methods.getRemainingTokens = function () {
-  if (this.isOwner) return Infinity;
-  if (!this.tokenLimit) return Infinity;
-  return Math.max(0, this.tokenLimit - this.totalTokensUsed);
-};
-
-/**
- * Get token usage percentage
- */
-userSchema.methods.getTokenUsagePercentage = function () {
-  if (this.isOwner || !this.tokenLimit) return 0;
-  return Math.min(100, Math.round((this.totalTokensUsed / this.tokenLimit) * 100));
-};
-
-/**
- * Format token stats for display
- */
-userSchema.methods.getTokenStats = function () {
-  return {
-    used: this.totalTokensUsed,
-    limit: this.tokenLimit,
-    remaining: this.getRemainingTokens(),
-    percentage: this.getTokenUsagePercentage(),
-    isUnlimited: this.isOwner || !this.tokenLimit,
-  };
+userSchema.methods.getRemainingMessages = function (limits) {
+  this.checkAndResetDaily();
+  const limit = this.plan === 'free' ? limits.freeDailyMessages :
+    this.plan === 'pro' ? limits.proDailyMessages : Infinity;
+  return Math.max(0, limit - this.dailyMessages);
 };
 
 module.exports = mongoose.model('User', userSchema);

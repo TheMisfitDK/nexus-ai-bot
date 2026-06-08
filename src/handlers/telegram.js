@@ -450,4 +450,298 @@ class TelegramBot {
     bot.command('grantpro', async (ctx) => {
       if (String(ctx.from.id) !== config.app.ownerIdTelegram) return;
       const args = ctx.message.text.slice('/grantpro'.length).trim().split(' ');
-      const days = parseInt(arg
+      const days = parseInt(args[1]) || 30;
+      await userService.upgradeToPro(`telegram:${args[0]}`, days);
+      await ctx.reply(`✅ Upgraded ${args[0]} to Pro for ${days} days`);
+    });
+  }
+
+  _setupHandlers() {
+    const { bot } = this;
+
+    // Photo
+    bot.on('photo', async (ctx) => {
+      if (!ctx.nexusUser.canSendMessage(config.limits)) return ctx.reply('⚠️ Daily limit reached.');
+      const msg = await ctx.reply('👁️ Analyzing image...');
+      try {
+        const photo = ctx.message.photo.pop();
+        const fileUrl = await ctx.telegram.getFileLink(photo.file_id);
+        const caption = ctx.message.caption || 'Describe this image in detail.';
+        const result = await analyzeImage(fileUrl.href, caption, ctx.nexusUser.aiProvider, ctx.nexusUser.aiModel);
+        await userService.incrementUsage(ctx.userId);
+        const chunks = chunkText(result, 4000);
+        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `👁️ *Image Analysis:*\n\n${chunks[0]}`, { parse_mode: 'Markdown' })
+          .catch(() => ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `👁️ Image Analysis:\n\n${chunks[0]}`));
+        for (let i = 1; i < chunks.length; i++) await ctx.reply(chunks[i]);
+      } catch (e) {
+        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ ${e.message}`);
+      }
+    });
+
+    // Voice
+    bot.on('voice', async (ctx) => {
+      if (!ctx.nexusUser.canSendMessage(config.limits)) return ctx.reply('⚠️ Daily limit reached.');
+      const msg = await ctx.reply('🎤 Transcribing...');
+      try {
+        const fileUrl = await ctx.telegram.getFileLink(ctx.message.voice.file_id);
+        const transcript = await transcribeAudio(fileUrl.href);
+        if (!transcript) return ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, '❌ Could not transcribe.');
+        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `🎤 *Transcription:*\n${transcript}`, { parse_mode: 'Markdown' });
+        await this._processMessage(ctx, transcript, ctx.nexusUser);
+      } catch (e) {
+        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ ${e.message}`);
+      }
+    });
+
+    // Document
+    bot.on('document', async (ctx) => {
+      const doc = ctx.message.document;
+      const allowed = ['text/', 'application/pdf', 'application/json', 'application/msword', 'application/vnd.openxmlformats'];
+      const isAllowed = allowed.some(t => doc.mime_type?.startsWith(t)) ||
+        /\.(txt|pdf|json|csv|md|js|py|ts|java|cpp|c|go|rs|html|css)$/i.test(doc.file_name || '');
+      if (!isAllowed) return ctx.reply('⚠️ Unsupported file type. Send: txt, pdf, json, csv, md, or code files.');
+
+      const msg = await ctx.reply('📄 Reading file...');
+      try {
+        const fileUrl = await ctx.telegram.getFileLink(doc.file_id);
+        const content = await extractFileContent(fileUrl.href, doc.mime_type, doc.file_name);
+        const caption = ctx.message.caption || 'Analyze this file and give a comprehensive summary.';
+        const result = await aiService.chat({
+          provider: ctx.nexusUser.aiProvider,
+          model: ctx.nexusUser.aiModel,
+          messages: [
+            { role: 'system', content: 'You are analyzing an uploaded file. Be thorough and helpful.' },
+            { role: 'user', content: `File: ${doc.file_name}\n\n${content.slice(0, 8000)}\n\nRequest: ${caption}` },
+          ],
+          maxTokens: ctx.nexusUser.maxTokens || 2048,
+        });
+        await userService.incrementUsage(ctx.userId);
+        const chunks = chunkText(result.content, 4000);
+        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `📄 *File Analysis:*\n\n${chunks[0]}`, { parse_mode: 'Markdown' })
+          .catch(() => ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `📄 File Analysis:\n\n${chunks[0]}`));
+        for (let i = 1; i < chunks.length; i++) await ctx.reply(chunks[i]);
+      } catch (e) {
+        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ ${e.message}`);
+      }
+    });
+
+    // Text messages
+    bot.on('text', async (ctx) => {
+      const text = ctx.message.text;
+      if (text.startsWith('/')) return;
+
+      // Keyboard buttons
+      const keyMap = {
+        '💬 New Chat': '/new',
+        '🤖 Models': '/model',
+        '🎨 Image': null,
+        '📊 Stats': '/stats',
+        '⚙️ Settings': '/settings',
+        '🆘 Help': '/help',
+      };
+      if (keyMap[text] !== undefined) {
+        if (text === '🎨 Image') return ctx.reply('Usage: /image <description>\nExample: /image a sunset over mountains');
+        return ctx.telegram.sendMessage(ctx.chat.id, text).then(() =>
+          bot.handleUpdate({ update_id: 0, message: { ...ctx.message, text: keyMap[text] } })
+        ).catch(() => {});
+      }
+
+      await this._processMessage(ctx, text, ctx.nexusUser);
+    });
+  }
+
+  async _processMessage(ctx, text, user) {
+    if (!user.canSendMessage(config.limits)) {
+      return ctx.reply(
+        `⚠️ Daily limit reached (${user.plan === 'free' ? config.limits.freeDailyMessages : config.limits.proDailyMessages} msgs).\n` +
+        (user.plan === 'free' ? '💎 Upgrade to Pro for more!' : '🔄 Resets tomorrow.')
+      );
+    }
+
+    await ctx.sendChatAction('typing');
+
+    try {
+      let systemPrompt = user.systemPrompt || '';
+      if (user.memoryEnabled && user.userMemory?.length) {
+        systemPrompt += `\n\nUser memories: ${user.userMemory.slice(-10).join('; ')}`;
+      }
+
+      const messages = user.contextEnabled !== false
+        ? await contextService.getMessages(ctx.userId, ctx.chatId, systemPrompt)
+        : (systemPrompt ? [{ role: 'system', content: systemPrompt }] : []);
+
+      messages.push({ role: 'user', content: text });
+
+      let responseText = '';
+      let sentMsg = null;
+      let lastUpdate = Date.now();
+
+      const result = await aiService.chat({
+        provider: user.aiProvider,
+        model: user.aiModel,
+        messages,
+        maxTokens: user.maxTokens || config.ai.defaultMaxTokens,
+        temperature: user.temperature || config.ai.defaultTemperature,
+        stream: true,
+        onToken: async (token) => {
+          responseText += token;
+          const now = Date.now();
+          if (now - lastUpdate > 1200) {
+            lastUpdate = now;
+            try {
+              if (!sentMsg) {
+                sentMsg = await ctx.reply(responseText + ' ▌');
+              } else {
+                await ctx.telegram.editMessageText(ctx.chat.id, sentMsg.message_id, null, responseText + ' ▌');
+              }
+            } catch { /* ignore edit errors */ }
+          }
+        },
+      });
+
+      const final = result.content || responseText;
+      const chunks = chunkText(final, 4000);
+
+      if (sentMsg) {
+        await ctx.telegram.editMessageText(ctx.chat.id, sentMsg.message_id, null, chunks[0], { parse_mode: 'Markdown' })
+          .catch(() => ctx.telegram.editMessageText(ctx.chat.id, sentMsg.message_id, null, chunks[0]));
+      } else {
+        await ctx.reply(chunks[0], { parse_mode: 'Markdown' }).catch(() => ctx.reply(chunks[0]));
+      }
+
+      for (let i = 1; i < chunks.length; i++) {
+        await ctx.reply(chunks[i], { parse_mode: 'Markdown' }).catch(() => ctx.reply(chunks[i]));
+      }
+
+      if (user.contextEnabled !== false) {
+        await contextService.addMessage(ctx.userId, ctx.chatId, 'user', text);
+        await contextService.addMessage(ctx.userId, ctx.chatId, 'assistant', final, {
+          provider: user.aiProvider, model: user.aiModel, tokensUsed: result.tokensUsed,
+        });
+      }
+
+      await userService.incrementUsage(ctx.userId, result.tokensUsed || 0);
+
+    } catch (err) {
+      logger.error(`Message processing: ${err.message}`);
+      await ctx.reply(`❌ ${err.message}`);
+    }
+  }
+
+  _setupCallbacks() {
+    const { bot } = this;
+
+    bot.action('cancel', ctx => ctx.deleteMessage().catch(() => {}));
+
+    // Provider
+    bot.action(/^prov:(.+)$/, async (ctx) => {
+      const provider = ctx.match[1];
+      const models = aiService.getModelsForProvider(provider);
+      if (!models.length) return ctx.answerCbQuery('No models available');
+      const buttons = models.map(m => [Markup.button.callback(`${m}`, `mdl:${provider}:${m}`)]);
+      buttons.push([Markup.button.callback('⬅️ Back', 'back:model')]);
+      await ctx.editMessageText(`🧠 *Select model for ${provider.toUpperCase()}:*`, {
+        parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons),
+      });
+      await ctx.answerCbQuery();
+    });
+
+    // Model
+    bot.action(/^mdl:(.+):(.+)$/, async (ctx) => {
+      const [, provider, model] = ctx.match;
+      await userService.setProvider(ctx.userId, provider, model);
+      await ctx.editMessageText(`✅ *Switched to ${provider.toUpperCase()} / ${model}*`, { parse_mode: 'Markdown' });
+      await ctx.answerCbQuery('✅ Updated!');
+    });
+
+    // Back to provider list
+    bot.action('back:model', async (ctx) => {
+      const providers = aiService.getAvailableProviders();
+      const buttons = providers.map(p => [Markup.button.callback(`${aiService.isFreeProvider(p) ? '🆓' : '💎'} ${p.toUpperCase()}`, `prov:${p}`)]);
+      buttons.push([Markup.button.callback('❌ Cancel', 'cancel')]);
+      await ctx.editMessageText('🤖 *Select AI Provider:*', { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+      await ctx.answerCbQuery();
+    });
+
+    // Persona
+    bot.action(/^persona:(.+)$/, async (ctx) => {
+      await userService.setPersona(ctx.userId, ctx.match[1]);
+      await ctx.editMessageText(`✅ *Persona set to: ${ctx.match[1]}*`, { parse_mode: 'Markdown' });
+      await ctx.answerCbQuery('✅ Updated!');
+    });
+
+    // Image provider
+    bot.action(/^imgprov:(.+)$/, async (ctx) => {
+      await userService.update(ctx.userId, { imageProvider: ctx.match[1] });
+      await ctx.editMessageText(`✅ *Image provider set to: ${ctx.match[1]}*`, { parse_mode: 'Markdown' });
+      await ctx.answerCbQuery('✅ Updated!');
+    });
+
+    // Toggles
+    bot.action('toggle:context', async (ctx) => {
+      const u = await userService.get(ctx.userId);
+      await userService.update(ctx.userId, { contextEnabled: u.contextEnabled === false ? true : false });
+      await ctx.answerCbQuery(`Context ${u.contextEnabled === false ? 'enabled' : 'disabled'}`);
+    });
+
+    bot.action('toggle:memory', async (ctx) => {
+      const u = await userService.get(ctx.userId);
+      await userService.update(ctx.userId, { memoryEnabled: !u.memoryEnabled });
+      await ctx.answerCbQuery(`Memory ${!u.memoryEnabled ? 'enabled' : 'disabled'}`);
+    });
+
+    // Settings shortcuts
+    bot.action('settings:provider', async (ctx) => {
+      await ctx.answerCbQuery();
+      await ctx.reply('Use /model to switch provider');
+    });
+    bot.action('settings:persona', async (ctx) => {
+      await ctx.answerCbQuery();
+      await ctx.reply('Use /persona to change persona');
+    });
+    bot.action('settings:temp', async (ctx) => {
+      await ctx.answerCbQuery();
+      await ctx.reply('Use /temp <0.0-2.0> to set temperature');
+    });
+  }
+
+  registerReminderDispatcher() {
+    reminderService.registerDispatcher('telegram', async (chatId, text) => {
+      await this.bot.telegram.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+    });
+  }
+
+  async launch() {
+    if (!this.bot) return;
+    this.registerReminderDispatcher();
+
+    await this.bot.telegram.setMyCommands([
+      { command: 'start', description: '⚡ Start the bot' },
+      { command: 'help', description: '📚 All commands' },
+      { command: 'model', description: '🤖 Switch AI model' },
+      { command: 'persona', description: '🎭 Set personality' },
+      { command: 'system', description: '🧠 Custom system prompt' },
+      { command: 'image', description: '🎨 Generate image' },
+      { command: 'new', description: '🆕 New conversation' },
+      { command: 'clear', description: '🗑️ Clear history' },
+      { command: 'summarize', description: '📊 Summarize chat' },
+      { command: 'translate', description: '🌐 Translate text' },
+      { command: 'remind', description: '⏰ Set reminder' },
+      { command: 'note', description: '📝 Save note' },
+      { command: 'stats', description: '📈 Your stats' },
+      { command: 'settings', description: '⚙️ Settings' },
+    ]).catch(e => logger.warn(`Could not set commands: ${e.message}`));
+
+    // Launch with graceful error handling
+    this.bot.launch({
+      dropPendingUpdates: true,
+    });
+
+    logger.info('🤖 Telegram bot launched');
+
+    process.once('SIGINT', () => this.bot.stop('SIGINT'));
+    process.once('SIGTERM', () => this.bot.stop('SIGTERM'));
+  }
+}
+
+module.exports = new TelegramBot();

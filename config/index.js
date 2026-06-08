@@ -1,4 +1,5 @@
-// config/index.js — NexusAI v3 Central Config with Owner Authorization
+// config/index.js — NexusAI v3 Central Config
+// Owner: TheMisfitDK — github.com/TheMisfitDK
 require('dotenv').config();
 
 module.exports = {
@@ -9,8 +10,6 @@ module.exports = {
     port: parseInt(process.env.PORT) || 3000,
     ownerIdTelegram: process.env.BOT_OWNER_ID,
     ownerIdDiscord: process.env.DISCORD_OWNER_ID,
-    authorizedTelegramUsers: process.env.AUTHORIZED_TELEGRAM_USERS || '',
-    authorizedDiscordUsers: process.env.AUTHORIZED_DISCORD_USERS || '',
     isDev: process.env.NODE_ENV !== 'production',
   },
 
@@ -156,10 +155,9 @@ module.exports = {
     },
   },
 
-  // ─── AUTHORIZATION & LIMITS ───────────────────────────────────
   limits: {
-    // Token limits for authorized users (owner has unlimited)
-    authorizedUserTokenLimit: parseInt(process.env.AUTHORIZED_USER_TOKEN_LIMIT) || 100000,
+    freeDailyMessages: parseInt(process.env.FREE_DAILY_MESSAGES) || 50,
+    proDailyMessages: parseInt(process.env.PRO_DAILY_MESSAGES) || 1000,
     maxContextMessages: 40,
     maxFileSize: 20 * 1024 * 1024,
     rateLimitWindow: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60000,

@@ -120,34 +120,34 @@ module.exports = {
   },
 
   // Image generation providers
-  imageGen: {
+    ImageGen: {
     defaultProvider: process.env.IMAGE_GEN_PROVIDER || 'stability',
     providers: {
       dalle: {
-        apiKey: process.env.OPENAI_API_KEY,
+        apiKey: process.env.OPENAI_API_KEY?.trim().replace(/['"]/g, ''),
         models: ['dall-e-3', 'dall-e-2'],
         enabled: !!process.env.OPENAI_API_KEY,
       },
       stability: {
-        apiKey: process.env.STABILITY_API_KEY,
+        apiKey: process.env.STABILITY_API_KEY?.trim().replace(/['"]/g, ''),
         models: ['stable-diffusion-3-5-large', 'stable-image-core', 'stable-image-ultra'],
         enabled: !!process.env.STABILITY_API_KEY,
         baseUrl: 'https://api.stability.ai',
       },
       together: {
-        apiKey: process.env.TOGETHER_API_KEY,
+        apiKey: process.env.TOGETHER_API_KEY?.trim().replace(/['"]/g, ''),
         models: ['black-forest-labs/FLUX.1-schnell-Free', 'black-forest-labs/FLUX.1.1-pro'],
         enabled: !!process.env.TOGETHER_API_KEY,
         baseUrl: 'https://api.together.xyz/v1',
       },
       huggingface: {
-        apiKey: process.env.HUGGINGFACE_API_KEY,
+        apiKey: process.env.HUGGINGFACE_API_KEY?.trim().replace(/['"]/g, ''),
         models: ['stabilityai/stable-diffusion-xl-base-1.0', 'runwayml/stable-diffusion-v1-5'],
         enabled: !!process.env.HUGGINGFACE_API_KEY,
         baseUrl: 'https://api-inference.huggingface.co/models',
       },
       fal: {
-        apiKey: process.env.FAL_API_KEY,
+        apiKey: process.env.FAL_API_KEY?.trim().replace(/['"]/g, ''),
         models: ['fal-ai/flux/schnell', 'fal-ai/flux-realism'],
         enabled: !!process.env.FAL_API_KEY,
         baseUrl: 'https://fal.run',

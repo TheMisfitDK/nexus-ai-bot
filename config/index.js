@@ -42,35 +42,40 @@ module.exports = {
 
     providers: {
       openai: {
-        apiKey: process.env.OPENAI_API_KEY,
+        apiKey: process.env.OPENAI_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'gpt-4o',
         models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
         free: false,
       },
       anthropic: {
-        apiKey: process.env.ANTHROPIC_API_KEY,
+        apiKey: process.env.ANTHROPIC_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'claude-sonnet-4-5',
         models: ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-3-5'],
         free: false,
       },
       google: {
-        apiKey: process.env.GOOGLE_AI_API_KEY,
+        apiKey: process.env.GOOGLE_AI_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'gemini-2.0-flash',
         models: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
         free: true,
       },
       groq: {
-        apiKey: process.env.GROQ_API_KEY,
+        apiKey: process.env.GROQ_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'llama-3.3-70b-versatile',
         models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it'],
         free: true,
         baseUrl: 'https://api.groq.com/openai/v1',
       },
       deepseek: {
-        apiKey: process.env.DEEPSEEK_API_KEY,
+        apiKey: process.env.DEEPSEEK_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'deepseek-chat',
         models: ['deepseek-chat', 'deepseek-reasoner'],
         free: false,
         baseUrl: 'https://api.deepseek.com/v1',
       },
       nvidia: {
-        apiKey: process.env.NVIDIA_API_KEY,
-        // FIXED: correct model IDs for NVIDIA NIM API
+        apiKey: process.env.NVIDIA_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'meta/llama-3.3-70b-instruct',
         models: [
           'meta/llama-3.3-70b-instruct',
           'meta/llama-3.1-8b-instruct',
@@ -81,43 +86,50 @@ module.exports = {
         baseUrl: 'https://integrate.api.nvidia.com/v1',
       },
       grok: {
-        apiKey: process.env.XAI_API_KEY,
+        apiKey: process.env.XAI_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'grok-2-1212',
         models: ['grok-2-1212', 'grok-beta'],
         free: false,
         baseUrl: 'https://api.x.ai/v1',
       },
       mistral: {
-        apiKey: process.env.MISTRAL_API_KEY,
+        apiKey: process.env.MISTRAL_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'mistral-large-latest',
         models: ['mistral-large-latest', 'mistral-small-latest', 'open-mistral-nemo'],
         free: false,
         baseUrl: 'https://api.mistral.ai/v1',
       },
       together: {
-        apiKey: process.env.TOGETHER_API_KEY,
+        apiKey: process.env.TOGETHER_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
         models: ['meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo', 'Qwen/Qwen2.5-72B-Instruct-Turbo'],
         free: false,
         baseUrl: 'https://api.together.xyz/v1',
       },
       perplexity: {
-        apiKey: process.env.PERPLEXITY_API_KEY,
+        apiKey: process.env.PERPLEXITY_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'llama-3.1-sonar-large-128k-online',
         models: ['llama-3.1-sonar-large-128k-online', 'llama-3.1-sonar-small-128k-online'],
         free: false,
         baseUrl: 'https://api.perplexity.ai',
       },
       huggingface: {
-        apiKey: process.env.HUGGINGFACE_API_KEY,
+        apiKey: process.env.HUGGINGFACE_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'HuggingFaceH4/zephyr-7b-beta',
         models: ['microsoft/Phi-3-mini-4k-instruct', 'HuggingFaceH4/zephyr-7b-beta'],
         free: true,
         baseUrl: 'https://api-inference.huggingface.co/models',
       },
       cohere: {
-        apiKey: process.env.COHERE_API_KEY,
+        apiKey: process.env.COHERE_API_KEY?.trim().replace(/['"]/g, ''),
+        defaultModel: 'command-r-plus-08-2024',
         models: ['command-r-plus-08-2024', 'command-r-08-2024'],
         free: false,
         baseUrl: 'https://api.cohere.ai/v1',
       },
     },
-  },
+  }
+
 
   // Image generation providers
     ImageGen: {

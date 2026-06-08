@@ -1,4 +1,4 @@
-// src/services/UserService.js
+// src/services/UserService.js — Authorization Management Service
 const User = require('../models/User');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../../config');
@@ -9,10 +9,15 @@ class UserService {
     let user = await User.findOne({ userId });
 
     if (!user) {
+      const isOwner = this._isOwner(platform, platformUserId);
       const referralCode = uuidv4().split('-')[0].toUpperCase();
+      
       user = await User.create({
         userId,
         platform,
+        isOwner,
+        isAuthorized: isOwner, // Owner is auto-authorized
+        tokenLimit: isOwner ? null : config.limits.authorizedUserTokenLimit,
         referralCode,
         aiProvider: config.ai.defaultProvider,
         aiModel: config.ai.defaultModel,
@@ -26,6 +31,72 @@ class UserService {
     }
 
     return user;
+  }
+
+  /**
+   * Check if platform user ID is the owner
+   */
+  _isOwner(platform, platformUserId) {
+    const userIdStr = String(platformUserId);
+    if (platform === 'telegram') return userIdStr === String(config.app.ownerIdTelegram);
+    if (platform === 'discord') return userIdStr === String(config.app.ownerIdDiscord);
+    return false;
+  }
+
+  /**
+   * Check if user is in authorized list
+   */
+  _isInAuthorizedList(platform, platformUserId) {
+    const userIdStr = String(platformUserId);
+    if (platform === 'telegram') {
+      const authorized = (config.app.authorizedTelegramUsers || '').split(',').map(x => x.trim()).filter(x => x);
+      return authorized.includes(userIdStr);
+    }
+    if (platform === 'discord') {
+      const authorized = (config.app.authorizedDiscordUsers || '').split(',').map(x => x.trim()).filter(x => x);
+      return authorized.includes(userIdStr);
+    }
+    return false;
+  }
+
+  /**
+   * Authorize a user to use the bot
+   */
+  async authorizeUser(userId, tokenLimit = null) {
+    return User.findOneAndUpdate(
+      { userId },
+      {
+        $set: {
+          isAuthorized: true,
+          authorizedBy: config.app.ownerIdTelegram || config.app.ownerIdDiscord,
+          authorizationDate: new Date(),
+          tokenLimit: tokenLimit || config.limits.authorizedUserTokenLimit,
+        },
+      },
+      { new: true }
+    );
+  }
+
+  /**
+   * Revoke a user's authorization
+   */
+  async revokeAuthorization(userId) {
+    return User.findOneAndUpdate(
+      { userId },
+      { $set: { isAuthorized: false, tokenLimit: null } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Set token limit for authorized user
+   */
+  async setTokenLimit(userId, tokenLimit) {
+    return User.findOneAndUpdate(
+      { userId },
+      { $set: { tokenLimit } },
+      { new: true }
+    );
   }
 
   async get(userId) {
@@ -82,39 +153,40 @@ class UserService {
     return this.update(userId, { isBanned: false, banReason: '' });
   }
 
-  async upgradeToPro(userId, daysValid = 30) {
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + daysValid);
-    return this.update(userId, { plan: 'pro', planExpiresAt: expiresAt });
-  }
-
-  async checkPlanExpiry(userId) {
-    const user = await this.get(userId);
-    if (!user) return;
-    if (user.plan === 'pro' && user.planExpiresAt && user.planExpiresAt < new Date()) {
-      await this.update(userId, { plan: 'free', planExpiresAt: null });
-    }
-  }
-
   async getStats(userId) {
     const user = await this.get(userId);
     if (!user) return null;
-    await this.checkPlanExpiry(userId);
+    
+    const tokenStats = user.getTokenStats();
+    
     return {
-      plan: user.plan,
+      isOwner: user.isOwner,
+      isAuthorized: user.isAuthorized,
+      authorizationDate: user.authorizationDate,
       totalMessages: user.totalMessages,
       dailyMessages: user.dailyMessages,
-      totalTokensUsed: user.totalTokensUsed,
-      remaining: user.getRemainingMessages(config.limits),
+      totalTokensUsed: tokenStats.used,
+      tokenLimit: tokenStats.limit,
+      remainingTokens: tokenStats.remaining,
+      tokenUsagePercentage: tokenStats.percentage,
+      isTokenLimitUnlimited: tokenStats.isUnlimited,
       provider: user.aiProvider,
       model: user.aiModel,
       persona: user.persona,
+      temperature: user.temperature,
       memberSince: user.createdAt,
     };
   }
 
   async getAllUsers(limit = 50, skip = 0) {
     return User.find().sort({ totalMessages: -1 }).limit(limit).skip(skip);
+  }
+
+  async getAuthorizedUsers(limit = 100, skip = 0) {
+    return User.find({ isAuthorized: true, isOwner: false })
+      .sort({ authorizationDate: -1 })
+      .limit(limit)
+      .skip(skip);
   }
 
   async getTopUsers(limit = 10) {
@@ -131,6 +203,23 @@ class UserService {
 
   async clearMemory(userId) {
     return this.update(userId, { userMemory: [] });
+  }
+
+  /**
+   * Get authorization status message
+   */
+  getAuthStatusMessage(user) {
+    if (user.isOwner) {
+      return '👑 Owner • Unlimited Access • ∞ Tokens';
+    }
+    if (!user.isAuthorized) {
+      return '🔐 Not Authorized • No Access';
+    }
+    const stats = user.getTokenStats();
+    if (stats.isUnlimited) {
+      return '✅ Authorized • ∞ Tokens Remaining';
+    }
+    return `✅ Authorized • ${stats.remaining.toLocaleString()} tokens remaining (${stats.percentage}% used)`;
   }
 }
 

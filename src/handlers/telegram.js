@@ -1,4 +1,4 @@
-// src/handlers/telegram.js — NexusAI v3 Telegram Bot
+// src/handlers/telegram.js — NexusAI v3 Telegram Bot with Owner Authorization
 // Owner: TheMisfitDK — github.com/TheMisfitDK
 const { Telegraf, Markup, session } = require('telegraf');
 const config = require('../../config');
@@ -41,7 +41,15 @@ class TelegramBot {
         ctx.nexusUser = user;
         ctx.userId = `telegram:${ctx.from.id}`;
         ctx.chatId = String(ctx.chat?.id || ctx.from.id);
-        if (user.isBanned) return ctx.reply('🚫 You are banned from using this bot.');
+
+        // Authorization check
+        if (!user.canUseService()) {
+          return ctx.reply('🔐 You are not authorized to use this bot.\nContact the owner for access.');
+        }
+
+        if (user.isBanned) {
+          return ctx.reply('🚫 You have been banned from using this bot.');
+        }
       } catch (err) {
         logger.error(`Middleware: ${err.message}`);
       }
@@ -57,20 +65,11 @@ class TelegramBot {
       const u = ctx.nexusUser;
       const name = ctx.from.first_name || 'there';
 
-      // Handle referral
-      const startParam = ctx.startPayload;
-      if (startParam?.startsWith('ref_') && !u.referredBy) {
-        const refCode = startParam.replace('ref_', '');
-        await userService.update(ctx.userId, { referredBy: refCode });
-        const referrer = await userService.findByReferralCode(refCode);
-        if (referrer) await userService.incrementReferral(referrer.userId);
-      }
-
       await ctx.replyWithMarkdown(
         `⚡ *Welcome to ${config.app.name}, ${name}!*\n\n` +
         `I'm your AI assistant powered by ${aiService.getAvailableProviders().length}+ AI models.\n\n` +
-        `*Current provider:* \`${u.aiProvider}/${u.aiModel}\`\n` +
-        `*Plan:* ${u.plan.toUpperCase()} | *Daily left:* ${u.getRemainingMessages(config.limits)}\n\n` +
+        `${userService.getAuthStatusMessage(u)}\n\n` +
+        `*Current provider:* \`${u.aiProvider}/${u.aiModel}\`\n\n` +
         `Just send a message to start chatting!\n` +
         `Use /help to see all commands.`,
         Markup.keyboard([
@@ -82,8 +81,7 @@ class TelegramBot {
 
     // /help
     bot.command(['help', 'h'], async (ctx) => {
-      await ctx.replyWithMarkdown(
-        `*📚 ${config.app.name} Commands*\n\n` +
+      let helpText = `*📚 ${config.app.name} Commands*\n\n` +
         `*🤖 AI:*\n` +
         `/model — Switch AI provider & model\n` +
         `/persona — Set AI personality\n` +
@@ -107,14 +105,25 @@ class TelegramBot {
         `/notes — View notes\n\n` +
         `*📊 Account:*\n` +
         `/stats — Your usage stats\n` +
-        `/plan — Plan info\n` +
-        `/referral — Referral link\n` +
-        `/feedback \\<text\\> — Send feedback\n\n` +
-        `*Send photos* for vision analysis\n` +
+        `/feedback \\<text\\> — Send feedback\n\n`;
+
+      // Owner-only commands
+      if (ctx.nexusUser.isOwner) {
+        helpText += `*👑 OWNER COMMANDS:*\n` +
+          `/authorize \\<user_id\\> \\[token_limit\\] — Authorize a user\n` +
+          `/revoke \\<user_id\\> — Revoke user access\n` +
+          `/authorized — List authorized users\n` +
+          `/ban \\<user_id\\> — Ban a user\n` +
+          `/unban \\<user_id\\> — Unban a user\n` +
+          `/broadcast \\<msg\\> — Send announcement\n\n`;
+      }
+
+      helpText += `*Send photos* for vision analysis\n` +
         `*Send voice* for transcription\n` +
-        `*Send files* \\(PDF/DOCX/TXT\\) for analysis`,
-        { parse_mode: 'MarkdownV2' }
-      ).catch(() => ctx.reply('Use /model /persona /system /temp /new /clear /summarize /export /image /translate /remind /reminders /note /notes /stats /referral /feedback'));
+        `*Send files* \\(PDF/DOCX/TXT\\) for analysis`;
+
+      await ctx.replyWithMarkdown(helpText)
+        .catch(() => ctx.reply('Use /model /persona /system /temp /new /clear /summarize /export /image /translate /remind /reminders /note /notes /stats /feedback'));
     });
 
     // /model
@@ -337,43 +346,32 @@ class TelegramBot {
       const stats = await userService.getStats(ctx.userId);
       if (!stats) return ctx.reply('Could not load stats.');
       const imgProviders = imageService.getAvailableProviders();
-      await ctx.replyWithMarkdown(
-        `📊 *Your Statistics*\n\n` +
-        `🎯 Plan: *${stats.plan.toUpperCase()}*\n` +
-        `💬 Total Messages: *${stats.totalMessages.toLocaleString()}*\n` +
-        `📅 Today: *${stats.dailyMessages}* \\(${stats.remaining} remaining\\)\n` +
-        `🔤 Tokens Used: *${stats.totalTokensUsed.toLocaleString()}*\n\n` +
-        `🤖 AI: *${stats.provider}/${stats.model}*\n` +
-        `🎭 Persona: *${stats.persona}*\n` +
-        `🌡️ Temperature: *${stats.temperature || 0.7}*\n\n` +
-        `🎨 Image providers: *${imgProviders.length > 0 ? imgProviders.join(', ') : 'none'}*\n` +
-        `📆 Member since: *${new Date(stats.memberSince).toLocaleDateString()}*`
-      ).catch(() => ctx.reply(`Stats: ${JSON.stringify(stats, null, 2)}`));
-    });
 
-    // /plan
-    bot.command('plan', async (ctx) => {
-      const u = ctx.nexusUser;
-      const limit = u.plan === 'free' ? config.limits.freeDailyMessages : config.limits.proDailyMessages;
-      await ctx.replyWithMarkdown(
-        `💎 *Your Plan: ${u.plan.toUpperCase()}*\n\n` +
-        `📅 Daily limit: ${limit} messages\n` +
-        `✅ Used today: ${u.dailyMessages}\n` +
-        `🔄 Resets: midnight\n\n` +
-        (u.plan === 'free' ? `_Upgrade to Pro for ${config.limits.proDailyMessages} daily messages!_` : `_Pro active${u.planExpiresAt ? ` until ${new Date(u.planExpiresAt).toLocaleDateString()}` : ''}_`)
-      );
-    });
+      let statsText = `📊 *Your Statistics*\n\n`;
+      if (stats.isOwner) {
+        statsText += `👑 *Status: OWNER (Unlimited Access)*\n\n`;
+      } else if (stats.isAuthorized) {
+        statsText += `✅ *Status: AUTHORIZED*\n` +
+          `📅 Auth Date: ${new Date(stats.authorizationDate).toLocaleDateString()}\n\n`;
+      }
 
-    // /referral
-    bot.command('referral', async (ctx) => {
-      const u = ctx.nexusUser;
-      const botInfo = await ctx.telegram.getMe();
-      await ctx.replyWithMarkdown(
-        `🎁 *Referral Program*\n\n` +
-        `Your code: \`${u.referralCode}\`\n` +
-        `Total referrals: *${u.referralCount || 0}*\n\n` +
-        `Share link:\n\`https://t.me/${botInfo.username}?start=ref_${u.referralCode}\``
-      );
+      statsText += `💬 *Total Messages:* ${stats.totalMessages.toLocaleString()}\n` +
+        `🔤 *Tokens Used:* ${stats.totalTokensUsed.toLocaleString()}\n`;
+
+      if (!stats.isTokenLimitUnlimited) {
+        statsText += `📊 *Token Limit:* ${stats.tokenLimit.toLocaleString()}\n` +
+          `🔄 *Remaining:* ${stats.remainingTokens.toLocaleString()} (${stats.tokenUsagePercentage}% used)\n\n`;
+      } else {
+        statsText += `🔄 *Token Limit:* ∞ (Unlimited)\n\n`;
+      }
+
+      statsText += `🤖 *AI:* ${stats.provider}/${stats.model}\n` +
+        `🎭 *Persona:* ${stats.persona}\n` +
+        `🌡️ *Temperature:* ${stats.temperature || 0.7}\n\n` +
+        `🎨 *Image providers:* ${imgProviders.length > 0 ? imgProviders.join(', ') : 'none'}\n` +
+        `📆 *Member since:* ${new Date(stats.memberSince).toLocaleDateString()}`;
+
+      await ctx.replyWithMarkdown(statsText).catch(() => ctx.reply(`Stats: ${JSON.stringify(stats, null, 2)}`));
     });
 
     // /feedback
@@ -412,11 +410,77 @@ class TelegramBot {
       await ctx.replyWithMarkdown(text);
     });
 
-    // Admin: /broadcast
+    // ─── OWNER AUTHORIZATION COMMANDS ──────────────────────────────
+
+    // /authorize <user_id> [token_limit]
+    bot.command('authorize', async (ctx) => {
+      if (!ctx.nexusUser.isOwner) {
+        return ctx.reply('🚫 Only the owner can authorize users.');
+      }
+
+      const args = ctx.message.text.slice('/authorize'.length).trim().split(' ');
+      const targetUserId = args[0];
+      const tokenLimit = args[1] ? parseInt(args[1]) : null;
+
+      if (!targetUserId) {
+        return ctx.reply('Usage: /authorize <user_id> [token_limit]\nExample: /authorize 123456789 50000');
+      }
+
+      try {
+        const user = await userService.authorizeUser(`telegram:${targetUserId}`, tokenLimit);
+        await ctx.reply(
+          `✅ User ${targetUserId} authorized!\n` +
+          `Token limit: ${tokenLimit ? tokenLimit.toLocaleString() : '∞ (unlimited)'}`
+        );
+      } catch (err) {
+        await ctx.reply(`❌ Error: ${err.message}`);
+      }
+    });
+
+    // /revoke <user_id>
+    bot.command('revoke', async (ctx) => {
+      if (!ctx.nexusUser.isOwner) {
+        return ctx.reply('🚫 Only the owner can revoke access.');
+      }
+
+      const userId = ctx.message.text.slice('/revoke'.length).trim();
+      if (!userId) return ctx.reply('Usage: /revoke <user_id>');
+
+      try {
+        await userService.revokeAuthorization(`telegram:${userId}`);
+        await ctx.reply(`✅ User ${userId} access revoked.`);
+      } catch (err) {
+        await ctx.reply(`❌ Error: ${err.message}`);
+      }
+    });
+
+    // /authorized
+    bot.command('authorized', async (ctx) => {
+      if (!ctx.nexusUser.isOwner) return;
+
+      const User = require('../models/User');
+      const users = await User.find({ isAuthorized: true, isOwner: false })
+        .select('userId tokenLimit authorizationDate')
+        .sort({ authorizationDate: -1 })
+        .limit(50);
+
+      if (!users.length) return ctx.reply('No authorized users yet.');
+
+      let text = '📋 *Authorized Users:*\n\n';
+      users.forEach((u, i) => {
+        text += `${i + 1}. ${u.userId}\n`;
+        text += `   Token limit: ${u.tokenLimit ? u.tokenLimit.toLocaleString() : '∞'}\n`;
+        text += `   Auth date: ${new Date(u.authorizationDate).toLocaleDateString()}\n\n`;
+      });
+      await ctx.replyWithMarkdown(text);
+    });
+
+    // /broadcast
     bot.command('broadcast', async (ctx) => {
-      if (String(ctx.from.id) !== config.app.ownerIdTelegram) return;
+      if (!ctx.nexusUser.isOwner) return;
       const text = ctx.message.text.slice('/broadcast'.length).trim();
       if (!text) return ctx.reply('Usage: /broadcast <message>');
+
       const users = await userService.getAllUsers(2000);
       let sent = 0, failed = 0;
       for (const u of users) {
@@ -430,29 +494,20 @@ class TelegramBot {
       await ctx.reply(`📢 Done!\n✅ Sent: ${sent}\n❌ Failed: ${failed}`);
     });
 
-    // Admin: /ban
+    // /ban <user_id>
     bot.command('ban', async (ctx) => {
-      if (String(ctx.from.id) !== config.app.ownerIdTelegram) return;
+      if (!ctx.nexusUser.isOwner) return;
       const args = ctx.message.text.slice('/ban'.length).trim().split(' ');
       await userService.ban(`telegram:${args[0]}`, args.slice(1).join(' ') || 'Banned by admin');
       await ctx.reply(`✅ Banned: ${args[0]}`);
     });
 
-    // Admin: /unban
+    // /unban <user_id>
     bot.command('unban', async (ctx) => {
-      if (String(ctx.from.id) !== config.app.ownerIdTelegram) return;
+      if (!ctx.nexusUser.isOwner) return;
       const id = ctx.message.text.slice('/unban'.length).trim();
       await userService.unban(`telegram:${id}`);
       await ctx.reply(`✅ Unbanned: ${id}`);
-    });
-
-    // Admin: /grantpro
-    bot.command('grantpro', async (ctx) => {
-      if (String(ctx.from.id) !== config.app.ownerIdTelegram) return;
-      const args = ctx.message.text.slice('/grantpro'.length).trim().split(' ');
-      const days = parseInt(args[1]) || 30;
-      await userService.upgradeToPro(`telegram:${args[0]}`, days);
-      await ctx.reply(`✅ Upgraded ${args[0]} to Pro for ${days} days`);
     });
   }
 
@@ -461,7 +516,9 @@ class TelegramBot {
 
     // Photo
     bot.on('photo', async (ctx) => {
-      if (!ctx.nexusUser.canSendMessage(config.limits)) return ctx.reply('⚠️ Daily limit reached.');
+      if (!ctx.nexusUser.hasTokensRemaining()) {
+        return ctx.reply(`⚠��� Token limit reached!\nUsed: ${ctx.nexusUser.totalTokensUsed.toLocaleString()} / ${ctx.nexusUser.tokenLimit?.toLocaleString() || '∞'}`);
+      }
       const msg = await ctx.reply('👁️ Analyzing image...');
       try {
         const photo = ctx.message.photo.pop();
@@ -480,7 +537,9 @@ class TelegramBot {
 
     // Voice
     bot.on('voice', async (ctx) => {
-      if (!ctx.nexusUser.canSendMessage(config.limits)) return ctx.reply('⚠️ Daily limit reached.');
+      if (!ctx.nexusUser.hasTokensRemaining()) {
+        return ctx.reply(`⚠️ Token limit reached!\nUsed: ${ctx.nexusUser.totalTokensUsed.toLocaleString()} / ${ctx.nexusUser.tokenLimit?.toLocaleString() || '∞'}`);
+      }
       const msg = await ctx.reply('🎤 Transcribing...');
       try {
         const fileUrl = await ctx.telegram.getFileLink(ctx.message.voice.file_id);
@@ -495,6 +554,9 @@ class TelegramBot {
 
     // Document
     bot.on('document', async (ctx) => {
+      if (!ctx.nexusUser.hasTokensRemaining()) {
+        return ctx.reply(`⚠️ Token limit reached!\nUsed: ${ctx.nexusUser.totalTokensUsed.toLocaleString()} / ${ctx.nexusUser.tokenLimit?.toLocaleString() || '∞'}`);
+      }
       const doc = ctx.message.document;
       const allowed = ['text/', 'application/pdf', 'application/json', 'application/msword', 'application/vnd.openxmlformats'];
       const isAllowed = allowed.some(t => doc.mime_type?.startsWith(t)) ||
@@ -551,10 +613,10 @@ class TelegramBot {
   }
 
   async _processMessage(ctx, text, user) {
-    if (!user.canSendMessage(config.limits)) {
+    if (!user.hasTokensRemaining()) {
       return ctx.reply(
-        `⚠️ Daily limit reached (${user.plan === 'free' ? config.limits.freeDailyMessages : config.limits.proDailyMessages} msgs).\n` +
-        (user.plan === 'free' ? '💎 Upgrade to Pro for more!' : '🔄 Resets tomorrow.')
+        `⚠️ Token limit reached!\n` +
+        `Used: ${user.totalTokensUsed.toLocaleString()} / ${user.tokenLimit?.toLocaleString() || '∞'}`
       );
     }
 
@@ -730,6 +792,7 @@ class TelegramBot {
       { command: 'note', description: '📝 Save note' },
       { command: 'stats', description: '📈 Your stats' },
       { command: 'settings', description: '⚙️ Settings' },
+      { command: 'feedback', description: '💬 Send feedback' },
     ]).catch(e => logger.warn(`Could not set commands: ${e.message}`));
 
     // Launch with graceful error handling

@@ -29,10 +29,10 @@ Built to deploy anywhere: Railway, Heroku, Render, Docker, or any VPS.
 
 | Provider | Models | Tier |
 |---|---|:---:|
-| **OpenAI** | GPT-4o, GPT-4o-mini, o1, o1-mini | 💳 |
-| **Anthropic** | Claude Opus 4, Sonnet 4, Haiku 3.5 | 💳 |
-| **Google** | Gemini 2.0 Flash, Gemini 1.5 Pro, Gemma 2 | 🆓 |
-| **Grok** | LLaMA 3.3 70B, Mixtral 8x7B, Gemma2 9B | 🆓 |
+| **OpenAI** | GPT-4o, GPT-4o-mini, GPT-4-Turbo, GPT-3.5-Turbo | 💳 |
+| **Anthropic** | Claude Opus 4.5, Sonnet 4.5, Haiku 3.5 | 💳 |
+| **Google** | Gemini 2.0 Flash, Gemini 1.5 Pro, Gemini 1.5 Flash | 🆓 |
+| **Groq** | LLaMA 3.3 70B, LLaMA 3.1 8B, Mixtral 8x7B, Gemma2 9B | 🆓 |
 | **NVIDIA NIM** | LLaMA 3.1 405B, Nemotron 70B, Mistral Large | 🆓 |
 | **DeepSeek** | DeepSeek Chat, Reasoner, Coder | 💳 |
 | **xAI Grok** | Grok-2, Grok-2-Vision | 💳 |
@@ -58,7 +58,7 @@ Built to deploy anywhere: Railway, Heroku, Render, Docker, or any VPS.
 - **Token budget** — configurable max tokens per response
 
 ### 🛠️ Tools
-- **Image generation** — DALL-E 3, 1024×1024, prompt via `/image`
+- **Image generation** — Stability AI (SD3/SDXL), DALL-E 3, FLUX via Together/fal.ai, HuggingFace — prompt via `/image`
 - **Vision / image analysis** — send any photo for AI description
 - **Voice transcription** — send voice messages, Whisper transcribes + replies
 - **File analysis** — upload PDF, DOCX, TXT, CSV, or code files for AI analysis
@@ -107,12 +107,12 @@ TELEGRAM_BOT_TOKEN=       # @BotFather → /newbot
 DISCORD_BOT_TOKEN=        # discord.com/developers → New Application → Bot
 DISCORD_CLIENT_ID=        # same portal, Application ID
 MONGODB_URI=              # mongodb+srv://... (Atlas free works)
-OPENAI_API_KEY=           # or swap for any free provider below
+GROQ_API_KEY=             # free at console.groq.com — used by default
 BOT_OWNER_ID=             # your Telegram numeric user ID
 DISCORD_OWNER_ID=         # your Discord numeric user ID
 ```
 
-**No OpenAI key?** Use free providers — set `DEFAULT_PROVIDER=groq` + `GROQ_API_KEY=...` (free at console.groq.com).
+**Default provider is Groq** (free). To switch: set `DEFAULT_PROVIDER=openai` + `OPENAI_API_KEY=...`.
 
 ### 3. Run
 ```bash
@@ -245,14 +245,22 @@ Key `.env` variables:
 |---|:---:|---|
 | `TELEGRAM_BOT_TOKEN` | ✅ | From @BotFather |
 | `DISCORD_BOT_TOKEN` | ✅ | Discord Developer Portal |
+| `DISCORD_CLIENT_ID` | ✅ | Discord Developer Portal, Application ID |
 | `MONGODB_URI` | ✅ | MongoDB connection string |
-| `DEFAULT_PROVIDER` | — | Default AI provider (default: `openai`) |
-| `DEFAULT_MODEL` | — | Default model (default: `gpt-4o-mini`) |
+| `DEFAULT_PROVIDER` | — | Default AI provider (default: `groq`) |
+| `DEFAULT_MODEL` | — | Default model (default: `llama-3.3-70b-versatile`) |
+| `IMAGE_GEN_PROVIDER` | — | Default image provider (default: `stability`) |
 | `FREE_DAILY_MESSAGES` | — | Daily limit for free users (default: `50`) |
 | `PRO_DAILY_MESSAGES` | — | Daily limit for Pro (default: `1000`) |
 | `BOT_OWNER_ID` | — | Telegram ID for admin commands |
+| `DISCORD_OWNER_ID` | — | Discord ID for admin commands |
+| `TELEGRAM_API_ID` | — | MTProto userbot (optional, from my.telegram.org) |
+| `TELEGRAM_API_HASH` | — | MTProto userbot (optional) |
+| `TELEGRAM_SESSION_STRING` | — | MTProto session (optional) |
 | `ENABLE_TELEGRAM` | — | Set `false` to disable (default: `true`) |
 | `ENABLE_DISCORD` | — | Set `false` to disable (default: `true`) |
+| `JWT_SECRET` | — | Secret for web dashboard auth |
+| `LOG_LEVEL` | — | Winston log level (default: `info`) |
 
 See `.env.example` for full list.
 

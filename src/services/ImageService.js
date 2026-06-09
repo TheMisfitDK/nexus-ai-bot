@@ -165,7 +165,7 @@ class ImageService {
     return { buffer: Buffer.from(imgRes.data), provider: 'fal.ai/FLUX', model };
   }
 
-  async _nvidia(prompt, model = 'qwen-image') {
+  async _nvidia(prompt, model = 'qwen/qwen-image') {
     const apiKey = config.imageGen.providers.nvidia.apiKey;
     const baseUrl = config.imageGen.providers.nvidia.baseUrl;
 

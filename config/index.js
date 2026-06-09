@@ -184,6 +184,12 @@ module.exports = {
         enabled: !!cleanKey(process.env.FAL_API_KEY),
         baseUrl: 'https://fal.run',
       },
+      nvidia: {
+        apiKey: cleanKey(process.env.NVIDIA_API_KEY),
+        models: ['qwen-image'],
+        enabled: !!cleanKey(process.env.NVIDIA_API_KEY),
+        baseUrl: 'https://integrate.api.nvidia.com/v1',
+      },
     },
   },
 

@@ -1,0 +1,49 @@
+{
+  "name": "nexus-ai-bot",
+  "version": "3.0.0",
+  "description": "Feature-rich multi-platform AI chatbot for Telegram & Discord — 12+ AI providers",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "engines": {
+    "node": "20.x",
+    "npm": ">=9.0.0"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "discord.js": "^14.15.3",
+    "mongoose": "^8.5.0",
+    "express": "^4.19.2",
+    "dotenv": "^16.4.5",
+    "axios": "^1.7.3",
+    "openai": "^4.52.7",
+    "@anthropic-ai/sdk": "^0.27.3",
+    "@google/generative-ai": "^0.17.1",
+    "groq-sdk": "^0.5.0",
+    "node-cron": "^3.0.3",
+    "winston": "^3.13.0",
+    "node-cache": "^5.1.2",
+    "uuid": "^10.0.0",
+    "moment": "^2.30.1",
+    "pdf-parse": "^1.1.1",
+    "mammoth": "^1.8.0",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "compression": "^1.7.4",
+    "helmet": "^7.1.0",
+    "cors": "^2.8.5",
+    "form-data": "^4.0.0",
+    "marked": "^13.0.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  },
+  "author": "TheMisfitDK <https://github.com/TheMisfitDK>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TheMisfitDK/nexus-ai-bot"
+  }
+}

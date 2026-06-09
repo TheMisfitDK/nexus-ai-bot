@@ -67,7 +67,7 @@ Built to deploy anywhere: Railway, Heroku, Render, Docker, or any VPS.
 - **Notes** — save, list, pin notes per user
 - **Conversation export** — download full history as Markdown or JSON
 
-### 👤 Account & Plans
+### 👤 Account & Plans (DISABLED)
 - **Free / Pro / Enterprise** tiers with daily message limits
 - **Referral system** — unique codes, track invite count
 - **Usage statistics** — message count, token usage, plan info

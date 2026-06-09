@@ -1,6 +1,8 @@
 // config/index.js — NexusAI Central Config
 // Owner: TheMisfitDK — github.com/TheMisfitDK
-require('dotenv').config();
+// config/index.js — NexusAI Central Config
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 // Helper to prevent API key 401 errors from spaces/quotes in .env
 function cleanKey(key) {

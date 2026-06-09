@@ -133,13 +133,17 @@ class ImageService {
     throw new Error('No image data returned from Together');
   }
 
-  async _huggingface(prompt, model = 'stabilityai/stable-diffusion-xl-base-1.0') {
+    async _huggingface(prompt, model = 'stabilityai/stable-diffusion-xl-base-1.0') {
     const apiKey = config.imageGen.providers.huggingface.apiKey;
     const res = await axios.post(
       `${config.imageGen.providers.huggingface.baseUrl}/${model}`,
       { inputs: prompt },
       {
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        headers: { 
+          Authorization: `Bearer ${apiKey}`, 
+          'Content-Type': 'application/json',
+          'Accept': 'image/png' // <-- ADD THIS LINE TO FIX THE ERROR
+        },
         responseType: 'arraybuffer',
         timeout: 120000,
       }

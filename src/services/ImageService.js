@@ -10,17 +10,22 @@ class ImageService {
       .map(([name]) => name);
   }
 
-  async generate(prompt, provider = null, model = null) {
+  // Added 'attempted' array to track failed providers and stop infinite loops
+  async generate(prompt, provider = null, model = null, attempted = []) {
     // Auto-select provider
-    if (!provider) provider = this._getBestProvider();
-    if (!provider) throw new Error('No image generation provider configured. Add STABILITY_API_KEY, HUGGINGFACE_API_KEY, or TOGETHER_API_KEY to env vars.');
+    if (!provider) provider = this._getBestProvider(attempted);
+    if (!provider) throw new Error('No image generation provider configured or all available providers failed.');
 
     const p = config.imageGen.providers[provider];
     if (!p?.enabled) {
-      const fallback = this._getBestProvider();
+      attempted.push(provider);
+      const fallback = this._getBestProvider(attempted);
       if (!fallback) throw new Error(`Image provider "${provider}" not configured.`);
       provider = fallback;
     }
+
+    // Add current provider to attempted list
+    attempted.push(provider);
 
     const useModel = model || config.imageGen.providers[provider].models[0];
     logger.debug(`Image gen: ${provider}/${useModel}`);
@@ -35,21 +40,33 @@ class ImageService {
         default: throw new Error(`Unknown image provider: ${provider}`);
       }
     } catch (err) {
-      logger.error(`Image gen error [${provider}]: ${err.message}`);
+      // Safely extract raw API error details from the provider
+      let apiErrorDetails = err.message;
+      if (err.response && err.response.data) {
+        apiErrorDetails = err.response.data instanceof Buffer 
+          ? err.response.data.toString('utf8') 
+          : JSON.stringify(err.response.data);
+      }
+
+      logger.error(`Image gen error [${provider}]: ${apiErrorDetails}`);
+      
       // Try fallback provider
-      const fallback = this._getBestProvider(provider);
+      const fallback = this._getBestProvider(attempted);
       if (fallback) {
         logger.info(`Falling back to ${fallback} for image gen`);
-        return this.generate(prompt, fallback);
+        return this.generate(prompt, fallback, null, attempted);
       }
-      throw new Error(`Image generation failed: ${err.message}`);
+      throw new Error(`Image generation failed on all providers. Last error (${provider}): ${apiErrorDetails}`);
     }
   }
 
-  _getBestProvider(exclude = null) {
+  // Modified to accept an array of already-tried providers
+  _getBestProvider(excludeArray = []) {
     const order = ['stability', 'dalle', 'together', 'fal', 'huggingface'];
     for (const name of order) {
-      if (name !== exclude && config.imageGen.providers[name]?.enabled) return name;
+      if (!excludeArray.includes(name) && config.imageGen.providers[name]?.enabled) {
+        return name;
+      }
     }
     return null;
   }
@@ -74,15 +91,21 @@ class ImageService {
     const apiKey = config.imageGen.providers.stability.apiKey;
     const baseUrl = config.imageGen.providers.stability.baseUrl;
 
-    // Stability AI v2beta API
     const FormData = require('form-data');
     const form = new FormData();
     form.append('prompt', prompt.slice(0, 10000));
     form.append('output_format', 'png');
 
+    // Handle Stability's SD3 endpoints needing the 'model' form data
+    const isSd3 = model.includes('stable-diffusion-3');
     const endpoint = model.includes('ultra') ? '/v2beta/stable-image/generate/ultra'
       : model.includes('core') ? '/v2beta/stable-image/generate/core'
-        : '/v2beta/stable-image/generate/sd3';
+      : '/v2beta/stable-image/generate/sd3';
+
+    if (isSd3) {
+      // e.g. converting 'stable-diffusion-3-5-large' to API format if necessary
+      form.append('model', 'sd3.5-large'); 
+    }
 
     const res = await axios.post(`${baseUrl}${endpoint}`, form, {
       headers: { ...form.getHeaders(), Authorization: `Bearer ${apiKey}`, Accept: 'image/*' },
@@ -102,7 +125,6 @@ class ImageService {
         timeout: 60000,
       }
     );
-    // Together returns URL or b64
     const data = res.data?.data?.[0];
     if (data?.b64_json) return { buffer: Buffer.from(data.b64_json, 'base64'), provider: 'Together/FLUX', model };
     if (data?.url) {
@@ -120,7 +142,7 @@ class ImageService {
       {
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         responseType: 'arraybuffer',
-        timeout: 120000, // HF can be slow on cold start
+        timeout: 120000,
       }
     );
     return { buffer: Buffer.from(res.data), provider: 'HuggingFace/SD', model };

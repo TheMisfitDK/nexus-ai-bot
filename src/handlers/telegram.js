@@ -14,6 +14,27 @@ const { analyzeImage } = require('../utils/imageUtils');
 const { transcribeAudio } = require('../utils/audioUtils');
 const { extractFileContent } = require('../utils/fileUtils');
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function isOwner(ctx) {
+  return String(ctx.from.id) === config.app.ownerIdTelegram;
+}
+
+/**
+ * Returns true if this user has access (owner bypasses all checks).
+ * Regular users need isAuthorized=true and tokenBalance > 0.
+ */
+function hasAccess(ctx) {
+  if (isOwner(ctx)) return true;
+  return ctx.nexusUser && ctx.nexusUser.canSendMessage();
+}
+
+function formatTokens(n) {
+  return Number(n).toLocaleString();
+}
+
+// ── Bot class ─────────────────────────────────────────────────────────────────
+
 class TelegramBot {
   constructor() {
     if (!config.platforms.telegram.token) {
@@ -56,21 +77,19 @@ class TelegramBot {
     bot.start(async (ctx) => {
       const u = ctx.nexusUser;
       const name = ctx.from.first_name || 'there';
+      const ownerMode = isOwner(ctx);
 
-      // Handle referral
-      const startParam = ctx.startPayload;
-      if (startParam?.startsWith('ref_') && !u.referredBy) {
-        const refCode = startParam.replace('ref_', '');
-        await userService.update(ctx.userId, { referredBy: refCode });
-        const referrer = await userService.findByReferralCode(refCode);
-        if (referrer) await userService.incrementReferral(referrer.userId);
-      }
+      const statusLine = ownerMode
+        ? `👑 *Owner mode — unlimited access*`
+        : u.isAuthorized
+          ? `✅ *Authorized* — ${formatTokens(u.tokenBalance)} tokens remaining`
+          : `🔒 *Not authorized* — contact the owner to get access`;
 
       await ctx.replyWithMarkdown(
         `⚡ *Welcome to ${config.app.name}, ${name}!*\n\n` +
         `I'm your AI assistant powered by ${aiService.getAvailableProviders().length}+ AI models.\n\n` +
-        `*Current provider:* \`${u.aiProvider}/${u.aiModel}\`\n` +
-        `*Plan:* ${u.plan.toUpperCase()} | *Daily left:* ${u.getRemainingMessages(config.limits)}\n\n` +
+        `*Provider:* \`${u.aiProvider}/${u.aiModel}\`\n` +
+        `${statusLine}\n\n` +
         `Just send a message to start chatting!\n` +
         `Use /help to see all commands.`,
         Markup.keyboard([
@@ -82,6 +101,17 @@ class TelegramBot {
 
     // /help
     bot.command(['help', 'h'], async (ctx) => {
+      const ownerSection = isOwner(ctx)
+        ? `\n*👑 Owner Commands:*\n` +
+          `/auth \\<id\\> \\[tokens\\] — Authorize user\n` +
+          `/deauth \\<id\\> — Revoke access\n` +
+          `/addtokens \\<id\\> \\<amount\\> — Add tokens\n` +
+          `/authed — List authorized users\n` +
+          `/broadcast \\<msg\\> — Announce to all\n` +
+          `/ban \\<id\\> \\[reason\\] — Ban user\n` +
+          `/unban \\<id\\> — Unban user\n`
+        : '';
+
       await ctx.replyWithMarkdown(
         `*📚 ${config.app.name} Commands*\n\n` +
         `*🤖 AI:*\n` +
@@ -106,15 +136,14 @@ class TelegramBot {
         `/note \\<text\\> — Save note\n` +
         `/notes — View notes\n\n` +
         `*📊 Account:*\n` +
-        `/stats — Your usage stats\n` +
-        `/plan — Plan info\n` +
-        `/referral — Referral link\n` +
-        `/feedback \\<text\\> — Send feedback\n\n` +
+        `/stats — Your usage & token balance\n` +
+        `/feedback \\<text\\> — Send feedback\n` +
+        `${ownerSection}\n` +
         `*Send photos* for vision analysis\n` +
         `*Send voice* for transcription\n` +
         `*Send files* \\(PDF/DOCX/TXT\\) for analysis`,
         { parse_mode: 'MarkdownV2' }
-      ).catch(() => ctx.reply('Use /model /persona /system /temp /new /clear /summarize /export /image /translate /remind /reminders /note /notes /stats /referral /feedback'));
+      ).catch(() => ctx.reply('Use /model /persona /system /temp /new /clear /summarize /export /image /translate /remind /reminders /note /notes /stats /feedback'));
     });
 
     // /model
@@ -170,12 +199,12 @@ class TelegramBot {
       await ctx.reply(`🌡️ Temperature set to ${val}`);
     });
 
-    // /tokens
+    // /tokens (max response tokens setting, not balance)
     bot.command('tokens', async (ctx) => {
       const val = parseInt(ctx.message.text.slice('/tokens'.length).trim());
       if (isNaN(val) || val < 100 || val > 8000) return ctx.reply('Usage: /tokens <100-8000>');
       await userService.update(ctx.userId, { maxTokens: val });
-      await ctx.reply(`🔢 Max tokens set to ${val}`);
+      await ctx.reply(`🔢 Max response tokens set to ${val}`);
     });
 
     // /new
@@ -337,43 +366,25 @@ class TelegramBot {
       const stats = await userService.getStats(ctx.userId);
       if (!stats) return ctx.reply('Could not load stats.');
       const imgProviders = imageService.getAvailableProviders();
+      const ownerMode = isOwner(ctx);
+
+      const tokenLine = ownerMode
+        ? `🔑 Access: *OWNER \\(unlimited\\)*`
+        : stats.isAuthorized
+          ? `🔑 Access: *Authorized* \\| Balance: *${formatTokens(stats.tokenBalance)} tokens*`
+          : `🔑 Access: *Not authorized*`;
+
       await ctx.replyWithMarkdown(
         `📊 *Your Statistics*\n\n` +
-        `🎯 Plan: *${stats.plan.toUpperCase()}*\n` +
+        `${tokenLine}\n` +
         `💬 Total Messages: *${stats.totalMessages.toLocaleString()}*\n` +
-        `📅 Today: *${stats.dailyMessages}* \\(${stats.remaining} remaining\\)\n` +
-        `🔤 Tokens Used: *${stats.totalTokensUsed.toLocaleString()}*\n\n` +
+        `🔤 Tokens Used: *${stats.totalTokensUsed.toLocaleString()}*\n` +
+        `🎁 Tokens Granted: *${formatTokens(stats.tokensGranted)}*\n\n` +
         `🤖 AI: *${stats.provider}/${stats.model}*\n` +
-        `🎭 Persona: *${stats.persona}*\n` +
-        `🌡️ Temperature: *${stats.temperature || 0.7}*\n\n` +
+        `🎭 Persona: *${stats.persona}*\n\n` +
         `🎨 Image providers: *${imgProviders.length > 0 ? imgProviders.join(', ') : 'none'}*\n` +
         `📆 Member since: *${new Date(stats.memberSince).toLocaleDateString()}*`
       ).catch(() => ctx.reply(`Stats: ${JSON.stringify(stats, null, 2)}`));
-    });
-
-    // /plan
-    bot.command('plan', async (ctx) => {
-      const u = ctx.nexusUser;
-      const limit = u.plan === 'free' ? config.limits.freeDailyMessages : config.limits.proDailyMessages;
-      await ctx.replyWithMarkdown(
-        `💎 *Your Plan: ${u.plan.toUpperCase()}*\n\n` +
-        `📅 Daily limit: ${limit} messages\n` +
-        `✅ Used today: ${u.dailyMessages}\n` +
-        `🔄 Resets: midnight\n\n` +
-        (u.plan === 'free' ? `_Upgrade to Pro for ${config.limits.proDailyMessages} daily messages!_` : `_Pro active${u.planExpiresAt ? ` until ${new Date(u.planExpiresAt).toLocaleDateString()}` : ''}_`)
-      );
-    });
-
-    // /referral
-    bot.command('referral', async (ctx) => {
-      const u = ctx.nexusUser;
-      const botInfo = await ctx.telegram.getMe();
-      await ctx.replyWithMarkdown(
-        `🎁 *Referral Program*\n\n` +
-        `Your code: \`${u.referralCode}\`\n` +
-        `Total referrals: *${u.referralCount || 0}*\n\n` +
-        `Share link:\n\`https://t.me/${botInfo.username}?start=ref_${u.referralCode}\``
-      );
     });
 
     // /feedback
@@ -412,9 +423,71 @@ class TelegramBot {
       await ctx.replyWithMarkdown(text);
     });
 
+    // ── Owner-only commands ──────────────────────────────────────────────────
+
+    // /auth <telegram_user_id> [tokens]
+    bot.command('auth', async (ctx) => {
+      if (!isOwner(ctx)) return;
+      const args = ctx.message.text.slice('/auth'.length).trim().split(/\s+/);
+      const targetId = args[0];
+      if (!targetId) return ctx.reply('Usage: /auth <telegram_user_id> [tokens]\nExample: /auth 123456789 5000');
+      const tokens = args[1] ? parseInt(args[1]) : config.app.defaultTokenGrant;
+      if (isNaN(tokens) || tokens <= 0) return ctx.reply('❌ Invalid token amount.');
+      const userId = `telegram:${targetId}`;
+      // Ensure the user exists
+      await userService.getOrCreate('telegram', targetId, {});
+      const user = await userService.authorizeUser(userId, tokens);
+      await ctx.reply(
+        `✅ Authorized \`${targetId}\`\n` +
+        `🎁 Granted: ${formatTokens(tokens)} tokens\n` +
+        `💰 Balance now: ${formatTokens(user.tokenBalance)} tokens`,
+        { parse_mode: 'Markdown' }
+      );
+    });
+
+    // /deauth <telegram_user_id>
+    bot.command('deauth', async (ctx) => {
+      if (!isOwner(ctx)) return;
+      const targetId = ctx.message.text.slice('/deauth'.length).trim();
+      if (!targetId) return ctx.reply('Usage: /deauth <telegram_user_id>');
+      await userService.revokeAuth(`telegram:${targetId}`);
+      await ctx.reply(`🔒 Revoked access for \`${targetId}\``, { parse_mode: 'Markdown' });
+    });
+
+    // /addtokens <telegram_user_id> <amount>
+    bot.command('addtokens', async (ctx) => {
+      if (!isOwner(ctx)) return;
+      const args = ctx.message.text.slice('/addtokens'.length).trim().split(/\s+/);
+      if (args.length < 2) return ctx.reply('Usage: /addtokens <telegram_user_id> <amount>');
+      const targetId = args[0];
+      const amount = parseInt(args[1]);
+      if (isNaN(amount) || amount <= 0) return ctx.reply('❌ Invalid amount.');
+      const user = await userService.addTokens(`telegram:${targetId}`, amount);
+      if (!user) return ctx.reply(`❌ User \`${targetId}\` not found.`, { parse_mode: 'Markdown' });
+      await ctx.reply(
+        `✅ Added ${formatTokens(amount)} tokens to \`${targetId}\`\n` +
+        `💰 New balance: ${formatTokens(user.tokenBalance)} tokens`,
+        { parse_mode: 'Markdown' }
+      );
+    });
+
+    // /authed — list authorized users
+    bot.command('authed', async (ctx) => {
+      if (!isOwner(ctx)) return;
+      const users = await userService.getAuthorizedUsers(30);
+      if (!users.length) return ctx.reply('No authorized users yet.');
+      let text = `🔑 *Authorized Users (${users.length}):*\n\n`;
+      users.forEach((u, i) => {
+        const [, id] = u.userId.split(':');
+        const name = u.username ? `@${u.username}` : (u.firstName || id);
+        text += `*${i + 1}.* ${name} \`${id}\`\n💰 ${formatTokens(u.tokenBalance)} tokens | 📨 ${u.totalMessages} msgs\n\n`;
+      });
+      await ctx.replyWithMarkdown(text);
+    });
+
     // Admin: /broadcast
     bot.command('broadcast', async (ctx) => {
-      if (String(ctx.from.id) !== config.app.ownerIdTelegram) return;
+      if (!isOwner(ctx)) return;
       const text = ctx.message.text.slice('/broadcast'.length).trim();
       if (!text) return ctx.reply('Usage: /broadcast <message>');
       const users = await userService.getAllUsers(2000);
@@ -424,7 +497,7 @@ class TelegramBot {
         try {
           await ctx.telegram.sendMessage(id, `📢 *Announcement:*\n\n${text}`, { parse_mode: 'Markdown' });
           sent++;
-          await new Promise(r => setTimeout(r, 50)); // rate limit
+          await new Promise(r => setTimeout(r, 50));
         } catch { failed++; }
       }
       await ctx.reply(`📢 Done!\n✅ Sent: ${sent}\n❌ Failed: ${failed}`);
@@ -432,7 +505,7 @@ class TelegramBot {
 
     // Admin: /ban
     bot.command('ban', async (ctx) => {
-      if (String(ctx.from.id) !== config.app.ownerIdTelegram) return;
+      if (!isOwner(ctx)) return;
       const args = ctx.message.text.slice('/ban'.length).trim().split(' ');
       await userService.ban(`telegram:${args[0]}`, args.slice(1).join(' ') || 'Banned by admin');
       await ctx.reply(`✅ Banned: ${args[0]}`);
@@ -440,19 +513,10 @@ class TelegramBot {
 
     // Admin: /unban
     bot.command('unban', async (ctx) => {
-      if (String(ctx.from.id) !== config.app.ownerIdTelegram) return;
+      if (!isOwner(ctx)) return;
       const id = ctx.message.text.slice('/unban'.length).trim();
       await userService.unban(`telegram:${id}`);
       await ctx.reply(`✅ Unbanned: ${id}`);
-    });
-
-    // Admin: /grantpro
-    bot.command('grantpro', async (ctx) => {
-      if (String(ctx.from.id) !== config.app.ownerIdTelegram) return;
-      const args = ctx.message.text.slice('/grantpro'.length).trim().split(' ');
-      const days = parseInt(args[1]) || 30;
-      await userService.upgradeToPro(`telegram:${args[0]}`, days);
-      await ctx.reply(`✅ Upgraded ${args[0]} to Pro for ${days} days`);
     });
   }
 
@@ -461,14 +525,14 @@ class TelegramBot {
 
     // Photo
     bot.on('photo', async (ctx) => {
-      if (!ctx.nexusUser.canSendMessage(config.limits)) return ctx.reply('⚠️ Daily limit reached.');
+      if (!hasAccess(ctx)) return ctx.reply(_noAccessMessage(ctx.nexusUser));
       const msg = await ctx.reply('👁️ Analyzing image...');
       try {
         const photo = ctx.message.photo.pop();
         const fileUrl = await ctx.telegram.getFileLink(photo.file_id);
         const caption = ctx.message.caption || 'Describe this image in detail.';
         const result = await analyzeImage(fileUrl.href, caption, ctx.nexusUser.aiProvider, ctx.nexusUser.aiModel);
-        await userService.incrementUsage(ctx.userId);
+        if (!isOwner(ctx)) await userService.incrementUsage(ctx.userId);
         const chunks = chunkText(result, 4000);
         await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `👁️ *Image Analysis:*\n\n${chunks[0]}`, { parse_mode: 'Markdown' })
           .catch(() => ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `👁️ Image Analysis:\n\n${chunks[0]}`));
@@ -480,7 +544,7 @@ class TelegramBot {
 
     // Voice
     bot.on('voice', async (ctx) => {
-      if (!ctx.nexusUser.canSendMessage(config.limits)) return ctx.reply('⚠️ Daily limit reached.');
+      if (!hasAccess(ctx)) return ctx.reply(_noAccessMessage(ctx.nexusUser));
       const msg = await ctx.reply('🎤 Transcribing...');
       try {
         const fileUrl = await ctx.telegram.getFileLink(ctx.message.voice.file_id);
@@ -515,7 +579,7 @@ class TelegramBot {
           ],
           maxTokens: ctx.nexusUser.maxTokens || 2048,
         });
-        await userService.incrementUsage(ctx.userId);
+        if (!isOwner(ctx)) await userService.incrementUsage(ctx.userId, result.tokensUsed || 0);
         const chunks = chunkText(result.content, 4000);
         await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `📄 *File Analysis:*\n\n${chunks[0]}`, { parse_mode: 'Markdown' })
           .catch(() => ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `📄 File Analysis:\n\n${chunks[0]}`));
@@ -530,7 +594,6 @@ class TelegramBot {
       const text = ctx.message.text;
       if (text.startsWith('/')) return;
 
-      // Keyboard buttons
       const keyMap = {
         '💬 New Chat': '/new',
         '🤖 Models': '/model',
@@ -551,11 +614,8 @@ class TelegramBot {
   }
 
   async _processMessage(ctx, text, user) {
-    if (!user.canSendMessage(config.limits)) {
-      return ctx.reply(
-        `⚠️ Daily limit reached (${user.plan === 'free' ? config.limits.freeDailyMessages : config.limits.proDailyMessages} msgs).\n` +
-        (user.plan === 'free' ? '💎 Upgrade to Pro for more!' : '🔄 Resets tomorrow.')
-      );
+    if (!hasAccess(ctx)) {
+      return ctx.reply(_noAccessMessage(user));
     }
 
     await ctx.sendChatAction('typing');
@@ -620,7 +680,10 @@ class TelegramBot {
         });
       }
 
-      await userService.incrementUsage(ctx.userId, result.tokensUsed || 0);
+      // Owner usage tracked for stats but does NOT deduct tokens
+      if (!isOwner(ctx)) {
+        await userService.incrementUsage(ctx.userId, result.tokensUsed || 0);
+      }
 
     } catch (err) {
       logger.error(`Message processing: ${err.message}`);
@@ -633,7 +696,6 @@ class TelegramBot {
 
     bot.action('cancel', ctx => ctx.deleteMessage().catch(() => {}));
 
-    // Provider
     bot.action(/^prov:(.+)$/, async (ctx) => {
       const provider = ctx.match[1];
       const models = aiService.getModelsForProvider(provider);
@@ -646,7 +708,6 @@ class TelegramBot {
       await ctx.answerCbQuery();
     });
 
-    // Model
     bot.action(/^mdl:(.+):(.+)$/, async (ctx) => {
       const [, provider, model] = ctx.match;
       await userService.setProvider(ctx.userId, provider, model);
@@ -654,7 +715,6 @@ class TelegramBot {
       await ctx.answerCbQuery('✅ Updated!');
     });
 
-    // Back to provider list
     bot.action('back:model', async (ctx) => {
       const providers = aiService.getAvailableProviders();
       const buttons = providers.map(p => [Markup.button.callback(`${aiService.isFreeProvider(p) ? '🆓' : '💎'} ${p.toUpperCase()}`, `prov:${p}`)]);
@@ -663,21 +723,18 @@ class TelegramBot {
       await ctx.answerCbQuery();
     });
 
-    // Persona
     bot.action(/^persona:(.+)$/, async (ctx) => {
       await userService.setPersona(ctx.userId, ctx.match[1]);
       await ctx.editMessageText(`✅ *Persona set to: ${ctx.match[1]}*`, { parse_mode: 'Markdown' });
       await ctx.answerCbQuery('✅ Updated!');
     });
 
-    // Image provider
     bot.action(/^imgprov:(.+)$/, async (ctx) => {
       await userService.update(ctx.userId, { imageProvider: ctx.match[1] });
       await ctx.editMessageText(`✅ *Image provider set to: ${ctx.match[1]}*`, { parse_mode: 'Markdown' });
       await ctx.answerCbQuery('✅ Updated!');
     });
 
-    // Toggles
     bot.action('toggle:context', async (ctx) => {
       const u = await userService.get(ctx.userId);
       await userService.update(ctx.userId, { contextEnabled: u.contextEnabled === false ? true : false });
@@ -690,7 +747,6 @@ class TelegramBot {
       await ctx.answerCbQuery(`Memory ${!u.memoryEnabled ? 'enabled' : 'disabled'}`);
     });
 
-    // Settings shortcuts
     bot.action('settings:provider', async (ctx) => {
       await ctx.answerCbQuery();
       await ctx.reply('Use /model to switch provider');
@@ -732,16 +788,22 @@ class TelegramBot {
       { command: 'settings', description: '⚙️ Settings' },
     ]).catch(e => logger.warn(`Could not set commands: ${e.message}`));
 
-    // Launch with graceful error handling
-    this.bot.launch({
-      dropPendingUpdates: true,
-    });
-
+    this.bot.launch({ dropPendingUpdates: true });
     logger.info('🤖 Telegram bot launched');
 
     process.once('SIGINT', () => this.bot.stop('SIGINT'));
     process.once('SIGTERM', () => this.bot.stop('SIGTERM'));
   }
+}
+
+// ── Shared helper (module-level) ─────────────────────────────────────────────
+
+function _noAccessMessage(user) {
+  if (!user || !user.isAuthorized) {
+    return '🔒 You are not authorized to use this bot.\nContact the owner to request access.';
+  }
+  // Authorized but out of tokens
+  return '⚠️ Your token balance is empty.\nContact the owner to get more tokens.';
 }
 
 module.exports = new TelegramBot();

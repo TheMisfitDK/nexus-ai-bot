@@ -1,4 +1,5 @@
 // src/handlers/discord.js — NexusAI v3 Discord Bot
+// Owner: TheMisfitDK — github.com/TheMisfitDK
 const {
   Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes,
   EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
@@ -17,6 +18,28 @@ const { analyzeImage } = require('../utils/imageUtils');
 const { extractFileContent } = require('../utils/fileUtils');
 
 const C = { primary: 0x5865F2, success: 0x57F287, error: 0xED4245, warn: 0xFEE75C };
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function isOwner(discordId) {
+  return String(discordId) === config.app.ownerIdDiscord;
+}
+
+function hasAccess(user, discordId) {
+  if (isOwner(discordId)) return true;
+  return user && user.canSendMessage();
+}
+
+function noAccessEmbed(user) {
+  const desc = (!user || !user.isAuthorized)
+    ? '🔒 You are not authorized.\nContact the owner to request access.'
+    : '⚠️ Your token balance is empty.\nContact the owner to top up your tokens.';
+  return new EmbedBuilder().setColor(C.error).setDescription(desc);
+}
+
+function formatTokens(n) {
+  return Number(n).toLocaleString();
+}
 
 class DiscordBot {
   constructor() {
@@ -73,6 +96,17 @@ class DiscordBot {
       new SlashCommandBuilder().setName('feedback').setDescription('Send feedback')
         .addStringOption(o => o.setName('message').setDescription('Feedback').setRequired(true)),
       new SlashCommandBuilder().setName('help').setDescription('Show help'),
+
+      // ── Owner-only commands (silently ignored for non-owners) ──
+      new SlashCommandBuilder().setName('authorize').setDescription('[Owner] Authorize a user')
+        .addStringOption(o => o.setName('user_id').setDescription('Discord user ID').setRequired(true))
+        .addIntegerOption(o => o.setName('tokens').setDescription('Token grant amount (default from config)')),
+      new SlashCommandBuilder().setName('deauthorize').setDescription('[Owner] Revoke a user\'s access')
+        .addStringOption(o => o.setName('user_id').setDescription('Discord user ID').setRequired(true)),
+      new SlashCommandBuilder().setName('addtokens').setDescription('[Owner] Add tokens to a user')
+        .addStringOption(o => o.setName('user_id').setDescription('Discord user ID').setRequired(true))
+        .addIntegerOption(o => o.setName('amount').setDescription('Tokens to add').setRequired(true)),
+      new SlashCommandBuilder().setName('authed').setDescription('[Owner] List authorized users'),
     ].map(c => c.toJSON());
   }
 
@@ -130,7 +164,9 @@ class DiscordBot {
       });
 
       if (user.isBanned) return message.reply('🚫 You are banned from using this bot.');
-      if (!user.canSendMessage(config.limits)) return message.reply('⚠️ Daily limit reached!');
+      if (!hasAccess(user, message.author.id)) {
+        return message.reply({ embeds: [noAccessEmbed(user)] });
+      }
 
       // Image attachment
       const attachment = message.attachments.first();
@@ -160,12 +196,82 @@ class DiscordBot {
 
     const cmd = interaction.commandName;
 
+    // ── Owner-only commands ──────────────────────────────────────────────────
+    if (cmd === 'authorize') {
+      if (!isOwner(interaction.user.id)) return interaction.reply({ content: '🔒 Owner only.', ephemeral: true });
+      const targetId = interaction.options.getString('user_id');
+      const tokens = interaction.options.getInteger('tokens') ?? config.app.defaultTokenGrant;
+      await userService.getOrCreate('discord', targetId, {});
+      const u = await userService.authorizeUser(`discord:${targetId}`, tokens);
+      return interaction.reply({
+        embeds: [new EmbedBuilder().setColor(C.success)
+          .setTitle('✅ User Authorized')
+          .addFields(
+            { name: 'User ID', value: targetId, inline: true },
+            { name: 'Granted', value: `${formatTokens(tokens)} tokens`, inline: true },
+            { name: 'Balance', value: `${formatTokens(u.tokenBalance)} tokens`, inline: true },
+          )],
+        ephemeral: true,
+      });
+    }
+
+    if (cmd === 'deauthorize') {
+      if (!isOwner(interaction.user.id)) return interaction.reply({ content: '🔒 Owner only.', ephemeral: true });
+      const targetId = interaction.options.getString('user_id');
+      await userService.revokeAuth(`discord:${targetId}`);
+      return interaction.reply({ content: `🔒 Revoked access for \`${targetId}\``, ephemeral: true });
+    }
+
+    if (cmd === 'addtokens') {
+      if (!isOwner(interaction.user.id)) return interaction.reply({ content: '🔒 Owner only.', ephemeral: true });
+      const targetId = interaction.options.getString('user_id');
+      const amount = interaction.options.getInteger('amount');
+      const u = await userService.addTokens(`discord:${targetId}`, amount);
+      if (!u) return interaction.reply({ content: `❌ User \`${targetId}\` not found.`, ephemeral: true });
+      return interaction.reply({
+        embeds: [new EmbedBuilder().setColor(C.success)
+          .setTitle('✅ Tokens Added')
+          .addFields(
+            { name: 'User ID', value: targetId, inline: true },
+            { name: 'Added', value: `${formatTokens(amount)} tokens`, inline: true },
+            { name: 'New Balance', value: `${formatTokens(u.tokenBalance)} tokens`, inline: true },
+          )],
+        ephemeral: true,
+      });
+    }
+
+    if (cmd === 'authed') {
+      if (!isOwner(interaction.user.id)) return interaction.reply({ content: '🔒 Owner only.', ephemeral: true });
+      const users = await userService.getAuthorizedUsers(25);
+      const embed = new EmbedBuilder().setColor(C.primary).setTitle(`🔑 Authorized Users (${users.length})`);
+      if (!users.length) {
+        embed.setDescription('No authorized users yet.');
+      } else {
+        users.forEach((u, i) => {
+          const [, id] = u.userId.split(':');
+          const name = u.username || u.firstName || id;
+          embed.addFields({
+            name: `${i + 1}. ${name} (${id})`,
+            value: `💰 ${formatTokens(u.tokenBalance)} tokens | 📨 ${u.totalMessages} msgs`,
+          });
+        });
+      }
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+
+    // ── Regular commands ─────────────────────────────────────────────────────
     if (cmd === 'chat') {
       await interaction.deferReply();
+      if (!hasAccess(user, interaction.user.id)) {
+        return interaction.editReply({ embeds: [noAccessEmbed(user)] });
+      }
       await this._processInteraction(interaction, interaction.options.getString('message'), user, userId, chatId);
 
     } else if (cmd === 'ask') {
       await interaction.deferReply();
+      if (!hasAccess(user, interaction.user.id)) {
+        return interaction.editReply({ embeds: [noAccessEmbed(user)] });
+      }
       const result = await aiService.chat({
         provider: user.aiProvider, model: user.aiModel,
         messages: [{ role: 'user', content: interaction.options.getString('question') }],
@@ -174,6 +280,7 @@ class DiscordBot {
       const embed = new EmbedBuilder().setColor(C.primary).setDescription(result.content.slice(0, 4096))
         .setFooter({ text: `${user.aiProvider}/${user.aiModel} • no context` });
       await interaction.editReply({ embeds: [embed] });
+      if (!isOwner(interaction.user.id)) await userService.incrementUsage(userId, result.tokensUsed || 0);
 
     } else if (cmd === 'model') {
       const providers = aiService.getAvailableProviders();
@@ -222,6 +329,9 @@ class DiscordBot {
 
     } else if (cmd === 'image') {
       await interaction.deferReply();
+      if (!hasAccess(user, interaction.user.id)) {
+        return interaction.editReply({ embeds: [noAccessEmbed(user)] });
+      }
       const prompt = interaction.options.getString('prompt');
       const provider = interaction.options.getString('provider') || null;
       const providers = imageService.getAvailableProviders();
@@ -282,11 +392,18 @@ class DiscordBot {
 
     } else if (cmd === 'stats') {
       const stats = await userService.getStats(userId);
+      const ownerAccess = isOwner(interaction.user.id);
+      const accessField = ownerAccess
+        ? '👑 OWNER (unlimited)'
+        : stats.isAuthorized
+          ? `✅ Authorized | ${formatTokens(stats.tokenBalance)} tokens`
+          : '🔒 Not authorized';
       const embed = new EmbedBuilder().setColor(C.primary).setTitle('📊 Statistics')
         .addFields(
-          { name: '🎯 Plan', value: stats.plan.toUpperCase(), inline: true },
-          { name: '💬 Total', value: String(stats.totalMessages), inline: true },
-          { name: '📅 Today', value: `${stats.dailyMessages} (${stats.remaining} left)`, inline: true },
+          { name: '🔑 Access', value: accessField, inline: false },
+          { name: '💬 Total Messages', value: String(stats.totalMessages), inline: true },
+          { name: '🔤 Tokens Used', value: formatTokens(stats.totalTokensUsed), inline: true },
+          { name: '🎁 Tokens Granted', value: formatTokens(stats.tokensGranted), inline: true },
           { name: '🤖 Provider', value: stats.provider, inline: true },
           { name: '🧠 Model', value: stats.model, inline: true },
           { name: '🎭 Persona', value: stats.persona, inline: true },
@@ -314,6 +431,7 @@ class DiscordBot {
       await interaction.reply({ content: '✅ Feedback sent!', ephemeral: true });
 
     } else if (cmd === 'help') {
+      const ownerAccess = isOwner(interaction.user.id);
       const embed = new EmbedBuilder().setColor(C.primary).setTitle(`⚡ ${config.app.name} Help`)
         .setDescription('Multi-provider AI chatbot — mention me or DM me to chat!')
         .addFields(
@@ -322,7 +440,11 @@ class DiscordBot {
           { name: '🛠️ Tools', value: '`/image` `/translate` `/remind` `/reminders`' },
           { name: '📝 Notes', value: '`/note` `/notes`' },
           { name: '📊 Account', value: '`/stats` `/settings` `/feedback`' },
-          { name: '💡 Tip', value: 'Mention me in any channel or DM me to chat without slash commands!' },
+          ...(ownerAccess ? [{
+            name: '👑 Owner',
+            value: '`/authorize` `/deauthorize` `/addtokens` `/authed`',
+          }] : []),
+          { name: '💡 Tip', value: 'Mention me in any channel or DM me to chat!' },
         );
       await interaction.reply({ embeds: [embed], ephemeral: true });
     }
@@ -388,7 +510,10 @@ class DiscordBot {
         await contextService.addMessage(userId, chatId, 'user', text);
         await contextService.addMessage(userId, chatId, 'assistant', result.content, { provider: user.aiProvider, model: user.aiModel });
       }
-      await userService.incrementUsage(userId, result.tokensUsed || 0);
+      // Owner bypass — don't deduct tokens
+      if (!isOwner(message.author.id)) {
+        await userService.incrementUsage(userId, result.tokensUsed || 0);
+      }
     } catch (err) {
       await message.reply(`❌ ${err.message}`);
     }
@@ -419,7 +544,9 @@ class DiscordBot {
         await contextService.addMessage(userId, chatId, 'user', text);
         await contextService.addMessage(userId, chatId, 'assistant', result.content, { provider: user.aiProvider, model: user.aiModel });
       }
-      await userService.incrementUsage(userId, result.tokensUsed || 0);
+      if (!isOwner(interaction.user.id)) {
+        await userService.incrementUsage(userId, result.tokensUsed || 0);
+      }
     } catch (err) {
       await interaction.editReply(`❌ ${err.message}`);
     }

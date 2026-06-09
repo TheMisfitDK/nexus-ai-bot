@@ -10,27 +10,20 @@ class ImageService {
       .map(([name]) => name);
   }
 
-  // Added 'attempted' array to track all failed providers in the current chain
-  async generate(prompt, provider = null, model = null, attempted = []) {
+  async generate(prompt, provider = null, model = null) {
     // Auto-select provider
-    if (!provider) provider = this._getBestProvider(attempted);
-    if (!provider) {
-      throw new Error('No available image generation providers left to try. Please check your API keys and config.');
-    }
+    if (!provider) provider = this._getBestProvider();
+    if (!provider) throw new Error('No image generation provider configured. Add STABILITY_API_KEY, HUGGINGFACE_API_KEY, or TOGETHER_API_KEY to env vars.');
 
     const p = config.imageGen.providers[provider];
     if (!p?.enabled) {
-      attempted.push(provider);
-      const fallback = this._getBestProvider(attempted);
-      if (!fallback) throw new Error(`Image provider "${provider}" not configured and no fallbacks available.`);
+      const fallback = this._getBestProvider();
+      if (!fallback) throw new Error(`Image provider "${provider}" not configured.`);
       provider = fallback;
     }
 
-    // Add current provider to attempted list to prevent infinite fallback loops
-    attempted.push(provider);
-
     const useModel = model || config.imageGen.providers[provider].models[0];
-    logger.debug(`Image gen attempt: ${provider}/${useModel}`);
+    logger.debug(`Image gen: ${provider}/${useModel}`);
 
     try {
       switch (provider) {
@@ -42,34 +35,21 @@ class ImageService {
         default: throw new Error(`Unknown image provider: ${provider}`);
       }
     } catch (err) {
-      // Safely extract Axios error responses (some endpoints return arraybuffers, so we handle that)
-      let apiErrorDetails = err.message;
-      if (err.response && err.response.data) {
-        apiErrorDetails = err.response.data instanceof Buffer 
-          ? err.response.data.toString('utf8') 
-          : JSON.stringify(err.response.data);
-      }
-
-      logger.error(`Image gen error [${provider}]: ${apiErrorDetails}`);
-      
-      // Try fallback provider, passing the full array of already attempted providers
-      const fallback = this._getBestProvider(attempted);
+      logger.error(`Image gen error [${provider}]: ${err.message}`);
+      // Try fallback provider
+      const fallback = this._getBestProvider(provider);
       if (fallback) {
-        logger.info(`Falling back to ${fallback} for image gen...`);
-        return this.generate(prompt, fallback, null, attempted);
+        logger.info(`Falling back to ${fallback} for image gen`);
+        return this.generate(prompt, fallback);
       }
-      
-      throw new Error(`Image generation failed on all available providers. Last error (${provider}): ${apiErrorDetails}`);
+      throw new Error(`Image generation failed: ${err.message}`);
     }
   }
 
-  // Now accepts an array of strings to exclude
-  _getBestProvider(excludeArray = []) {
+  _getBestProvider(exclude = null) {
     const order = ['stability', 'dalle', 'together', 'fal', 'huggingface'];
     for (const name of order) {
-      if (!excludeArray.includes(name) && config.imageGen.providers[name]?.enabled) {
-        return name;
-      }
+      if (name !== exclude && config.imageGen.providers[name]?.enabled) return name;
     }
     return null;
   }
@@ -92,8 +72,9 @@ class ImageService {
 
   async _stability(prompt, model = 'stable-image-core') {
     const apiKey = config.imageGen.providers.stability.apiKey;
-    const baseUrl = config.imageGen.providers.stability.baseUrl || 'https://api.stability.ai';
+    const baseUrl = config.imageGen.providers.stability.baseUrl;
 
+    // Stability AI v2beta API
     const FormData = require('form-data');
     const form = new FormData();
     form.append('prompt', prompt.slice(0, 10000));
@@ -121,7 +102,7 @@ class ImageService {
         timeout: 60000,
       }
     );
-    
+    // Together returns URL or b64
     const data = res.data?.data?.[0];
     if (data?.b64_json) return { buffer: Buffer.from(data.b64_json, 'base64'), provider: 'Together/FLUX', model };
     if (data?.url) {
@@ -133,15 +114,13 @@ class ImageService {
 
   async _huggingface(prompt, model = 'stabilityai/stable-diffusion-xl-base-1.0') {
     const apiKey = config.imageGen.providers.huggingface.apiKey;
-    const baseUrl = config.imageGen.providers.huggingface.baseUrl || 'https://api-inference.huggingface.co/models';
-    
     const res = await axios.post(
-      `${baseUrl}/${model}`,
+      `${config.imageGen.providers.huggingface.baseUrl}/${model}`,
       { inputs: prompt },
       {
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         responseType: 'arraybuffer',
-        timeout: 120000, 
+        timeout: 120000, // HF can be slow on cold start
       }
     );
     return { buffer: Buffer.from(res.data), provider: 'HuggingFace/SD', model };

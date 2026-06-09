@@ -23,24 +23,20 @@ const userSchema = new mongoose.Schema({
   streamResponses: { type: Boolean, default: true },
   responseFormat: { type: String, enum: ['text', 'markdown', 'html'], default: 'markdown' },
 
-  // Usage & Limits
-  plan: { type: String, enum: ['free', 'pro', 'enterprise'], default: 'free' },
-  dailyMessages: { type: Number, default: 0 },
+  // Authorization & Token Balance
+  isAuthorized: { type: Boolean, default: false },
+  tokenBalance: { type: Number, default: 0 },
+  tokensGranted: { type: Number, default: 0 },  // lifetime total granted
+
+  // Usage tracking (stats only, not for limiting)
   totalMessages: { type: Number, default: 0 },
   totalTokensUsed: { type: Number, default: 0 },
-  lastMessageDate: Date,
-  planExpiresAt: Date,
 
   // State
   isBlocked: { type: Boolean, default: false },
   isAdmin: { type: Boolean, default: false },
   isBanned: { type: Boolean, default: false },
   banReason: String,
-
-  // Referral
-  referredBy: String,
-  referralCode: { type: String, unique: true, sparse: true },
-  referralCount: { type: Number, default: 0 },
 
   // Notifications
   notifications: {
@@ -60,28 +56,13 @@ const userSchema = new mongoose.Schema({
   lastActiveAt: { type: Date, default: Date.now },
 }, { timestamps: true });
 
-// Reset daily count if new day
-userSchema.methods.checkAndResetDaily = function () {
-  const now = new Date();
-  const last = this.lastMessageDate;
-  if (!last || now.toDateString() !== last.toDateString()) {
-    this.dailyMessages = 0;
-    this.lastMessageDate = now;
-  }
+// Returns true if user has access (authorized + tokens remaining)
+userSchema.methods.canSendMessage = function () {
+  return this.isAuthorized && this.tokenBalance > 0;
 };
 
-userSchema.methods.canSendMessage = function (limits) {
-  this.checkAndResetDaily();
-  const limit = this.plan === 'free' ? limits.freeDailyMessages :
-    this.plan === 'pro' ? limits.proDailyMessages : Infinity;
-  return this.dailyMessages < limit;
-};
-
-userSchema.methods.getRemainingMessages = function (limits) {
-  this.checkAndResetDaily();
-  const limit = this.plan === 'free' ? limits.freeDailyMessages :
-    this.plan === 'pro' ? limits.proDailyMessages : Infinity;
-  return Math.max(0, limit - this.dailyMessages);
+userSchema.methods.getRemainingTokens = function () {
+  return Math.max(0, this.tokenBalance);
 };
 
 module.exports = mongoose.model('User', userSchema);

@@ -7,14 +7,39 @@ const config = require('../config');
 const logger = require('./utils/logger');
 const { startServer } = require('./server');
 const reminderService = require('./services/ReminderService');
+const userService = require('./services/UserService');
 
 const banner = `
 ╔═══════════════════════════════════════════╗
-║          NEXUS AI BOT  v2.0.0             ║
+║          NEXUS AI BOT  v3.0.0             ║
 ║   Multi-Platform • Multi-Provider AI      ║
 ║   by TheMisfitDK — github.com/TheMisfitDK ║
 ╚═══════════════════════════════════════════╝
 `;
+
+/**
+ * Apply pre-authorized users from AUTHORIZED_USERS env var.
+ * Format: "telegram:123456:5000,discord:987654:10000"
+ * Tokens are additive if user already exists.
+ */
+async function applyPreAuthorizedUsers() {
+  const entries = config.app.preAuthorizedUsers;
+  if (!entries.length) return;
+
+  logger.info(`🔑 Applying ${entries.length} pre-authorized user(s) from env...`);
+  for (const entry of entries) {
+    try {
+      const userId = `${entry.platform}:${entry.userId}`;
+      const tokens = entry.tokens ?? config.app.defaultTokenGrant;
+      // Ensure user record exists (getOrCreate with minimal data)
+      await userService.getOrCreate(entry.platform, entry.userId, {});
+      await userService.authorizeUser(userId, tokens);
+      logger.info(`  ✅ Pre-authorized ${userId} with ${tokens} tokens`);
+    } catch (err) {
+      logger.warn(`  ⚠️  Failed to pre-authorize ${entry.platform}:${entry.userId}: ${err.message}`);
+    }
+  }
+}
 
 async function main() {
   console.log(banner);
@@ -30,6 +55,9 @@ async function main() {
     logger.error(`❌ MongoDB connection failed: ${err.message}`);
     process.exit(1);
   }
+
+  // Apply pre-authorized users from env
+  await applyPreAuthorizedUsers();
 
   // Start web server (required for Heroku/Railway port binding)
   startServer();

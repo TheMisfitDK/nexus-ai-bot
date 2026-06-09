@@ -1,6 +1,23 @@
-// config/index.js — NexusAI v3 Central Config
+// config/index.js — NexusAI Central Config
 // Owner: TheMisfitDK — github.com/TheMisfitDK
 require('dotenv').config();
+
+// Parse pre-authorized users from env: "telegram:123456:5000,discord:987654:10000"
+// Format: platform:userId:tokens  (tokens optional, defaults to DEFAULT_TOKEN_GRANT)
+function parseAuthorizedUsers() {
+  const raw = process.env.AUTHORIZED_USERS || '';
+  if (!raw.trim()) return [];
+  return raw.split(',').map(entry => {
+    const parts = entry.trim().split(':');
+    // platform:userId  OR  platform:userId:tokens
+    if (parts.length < 2) return null;
+    return {
+      platform: parts[0],
+      userId: parts[1],
+      tokens: parts[2] ? parseInt(parts[2]) : null, // null = use default
+    };
+  }).filter(Boolean);
+}
 
 module.exports = {
   app: {
@@ -11,13 +28,16 @@ module.exports = {
     ownerIdTelegram: process.env.BOT_OWNER_ID,
     ownerIdDiscord: process.env.DISCORD_OWNER_ID,
     isDev: process.env.NODE_ENV !== 'production',
+    // Default tokens granted to a user when authorized without explicit amount
+    defaultTokenGrant: parseInt(process.env.DEFAULT_TOKEN_GRANT) || 10000,
+    // Pre-authorized users from env (applied at boot)
+    preAuthorizedUsers: parseAuthorizedUsers(),
   },
 
   platforms: {
     telegram: {
       enabled: process.env.ENABLE_TELEGRAM !== 'false',
       token: process.env.TELEGRAM_BOT_TOKEN,
-      // MTProto userbot (optional — for advanced features)
       apiId: process.env.TELEGRAM_API_ID ? parseInt(process.env.TELEGRAM_API_ID) : null,
       apiHash: process.env.TELEGRAM_API_HASH || null,
       sessionString: process.env.TELEGRAM_SESSION_STRING || null,
@@ -70,7 +90,6 @@ module.exports = {
       },
       nvidia: {
         apiKey: process.env.NVIDIA_API_KEY,
-        // FIXED: correct model IDs for NVIDIA NIM API
         models: [
           'meta/llama-3.3-70b-instruct',
           'meta/llama-3.1-8b-instruct',
@@ -119,7 +138,6 @@ module.exports = {
     },
   },
 
-  // Image generation providers
   imageGen: {
     defaultProvider: process.env.IMAGE_GEN_PROVIDER || 'stability',
     providers: {
@@ -156,8 +174,6 @@ module.exports = {
   },
 
   limits: {
-    freeDailyMessages: parseInt(process.env.FREE_DAILY_MESSAGES) || 50,
-    proDailyMessages: parseInt(process.env.PRO_DAILY_MESSAGES) || 1000,
     maxContextMessages: 40,
     maxFileSize: 20 * 1024 * 1024,
     rateLimitWindow: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60000,

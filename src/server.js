@@ -36,20 +36,21 @@ const adminAuth = (req, res, next) => {
 app.get('/api/stats', adminAuth, async (req, res) => {
   try {
     const User = require('./models/User');
-    const [totalUsers, proUsers, bannedUsers, topUsers] = await Promise.all([
+    const [totalUsers, authorizedUsers, bannedUsers, topUsers] = await Promise.all([
       User.countDocuments(),
-      User.countDocuments({ plan: 'pro' }),
+      User.countDocuments({ isAuthorized: true }),
       User.countDocuments({ isBanned: true }),
       userService.getTopUsers(5),
     ]);
 
     res.json({
-      users: { total: totalUsers, pro: proUsers, banned: bannedUsers },
+      users: { total: totalUsers, authorized: authorizedUsers, banned: bannedUsers },
       topUsers: topUsers.map(u => ({
         userId: u.userId,
         username: u.username || 'Unknown',
         messages: u.totalMessages,
-        plan: u.plan,
+        tokenBalance: u.tokenBalance,
+        isAuthorized: u.isAuthorized,
       })),
     });
   } catch (err) {
@@ -70,10 +71,10 @@ app.post('/api/users/:userId/ban', adminAuth, async (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/users/:userId/upgrade', adminAuth, async (req, res) => {
-  const { days } = req.body;
-  await userService.upgradeToPro(req.params.userId, days || 30);
-  res.json({ success: true });
+app.post('/api/users/:userId/authorize', adminAuth, async (req, res) => {
+  const { tokens } = req.body;
+  const user = await userService.authorizeUser(req.params.userId, tokens ?? config.app.defaultTokenGrant);
+  res.json({ success: true, tokenBalance: user.tokenBalance });
 });
 
 function startServer() {

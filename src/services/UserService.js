@@ -1,6 +1,5 @@
 // src/services/UserService.js
 const User = require('../models/User');
-const { v4: uuidv4 } = require('uuid');
 const config = require('../../config');
 
 class UserService {
@@ -9,17 +8,14 @@ class UserService {
     let user = await User.findOne({ userId });
 
     if (!user) {
-      const referralCode = uuidv4().split('-')[0].toUpperCase();
       user = await User.create({
         userId,
         platform,
-        referralCode,
         aiProvider: config.ai.defaultProvider,
         aiModel: config.ai.defaultModel,
         ...userData,
       });
     } else {
-      // Update last active
       user.lastActiveAt = new Date();
       if (userData.username) user.username = userData.username;
       await user.save();
@@ -64,14 +60,17 @@ class UserService {
   }
 
   async incrementUsage(userId, tokensUsed = 0) {
-    return User.findOneAndUpdate(
-      { userId },
-      {
-        $inc: { dailyMessages: 1, totalMessages: 1, totalTokensUsed: tokensUsed },
-        $set: { lastMessageDate: new Date(), lastActiveAt: new Date() },
+    const update = {
+      $inc: {
+        totalMessages: 1,
+        totalTokensUsed: tokensUsed,
+        // Deduct from balance (owner's balance is not tracked — bypassed before this call)
+        tokenBalance: -tokensUsed,
       },
-      { new: true }
-    );
+      $set: { lastActiveAt: new Date() },
+    };
+    // Clamp tokenBalance at 0 via a follow-up if needed — simpler to just decrement and let canSendMessage guard
+    return User.findOneAndUpdate({ userId }, update, { new: true });
   }
 
   async ban(userId, reason = 'Violated terms of service') {
@@ -82,30 +81,61 @@ class UserService {
     return this.update(userId, { isBanned: false, banReason: '' });
   }
 
-  async upgradeToPro(userId, daysValid = 30) {
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + daysValid);
-    return this.update(userId, { plan: 'pro', planExpiresAt: expiresAt });
+  // ── Authorization Framework ──────────────────────────────────────────────
+
+  /**
+   * Authorize a user and grant them N tokens.
+   * @param {string} userId  - "platform:id" format
+   * @param {number} tokens  - Token balance to grant (default from config)
+   */
+  async authorizeUser(userId, tokens) {
+    const amount = tokens ?? config.app.defaultTokenGrant;
+    return User.findOneAndUpdate(
+      { userId },
+      {
+        $set: { isAuthorized: true },
+        $inc: { tokenBalance: amount, tokensGranted: amount },
+      },
+      { new: true }
+    );
   }
 
-  async checkPlanExpiry(userId) {
-    const user = await this.get(userId);
-    if (!user) return;
-    if (user.plan === 'pro' && user.planExpiresAt && user.planExpiresAt < new Date()) {
-      await this.update(userId, { plan: 'free', planExpiresAt: null });
-    }
+  /**
+   * Revoke a user's authorization (does not erase remaining tokens).
+   */
+  async revokeAuth(userId) {
+    return this.update(userId, { isAuthorized: false });
+  }
+
+  /**
+   * Add tokens to an already-authorized user's balance.
+   */
+  async addTokens(userId, amount) {
+    return User.findOneAndUpdate(
+      { userId },
+      { $inc: { tokenBalance: amount, tokensGranted: amount } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Returns list of all authorized users, sorted by tokensGranted desc.
+   */
+  async getAuthorizedUsers(limit = 50) {
+    return User.find({ isAuthorized: true, isBanned: false })
+      .sort({ tokensGranted: -1 })
+      .limit(limit);
   }
 
   async getStats(userId) {
     const user = await this.get(userId);
     if (!user) return null;
-    await this.checkPlanExpiry(userId);
     return {
-      plan: user.plan,
+      isAuthorized: user.isAuthorized,
+      tokenBalance: user.tokenBalance,
+      tokensGranted: user.tokensGranted,
       totalMessages: user.totalMessages,
-      dailyMessages: user.dailyMessages,
       totalTokensUsed: user.totalTokensUsed,
-      remaining: user.getRemainingMessages(config.limits),
       provider: user.aiProvider,
       model: user.aiModel,
       persona: user.persona,

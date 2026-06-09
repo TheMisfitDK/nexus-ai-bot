@@ -174,7 +174,7 @@ module.exports = {
       },
       huggingface: {
         apiKey: cleanKey(process.env.HUGGINGFACE_API_KEY),
-        models: ['stabilityai/stable-diffusion-xl-base-1.0', 'runwayml/stable-diffusion-v1-5'],
+        models: ['black-forest-labs/FLUX.1-schnell'], // <-- Updated to the supported FLUX model
         enabled: !!cleanKey(process.env.HUGGINGFACE_API_KEY),
         baseUrl: 'https://router.huggingface.co/hf-inference/models',
       },

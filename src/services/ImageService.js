@@ -167,10 +167,12 @@ class ImageService {
 
   async _nvidia(prompt, model = 'qwen/qwen-image') {
     const apiKey = config.imageGen.providers.nvidia.apiKey;
-    const baseUrl = config.imageGen.providers.nvidia.baseUrl;
+    
+    // FIX: Override the text-only URL from config with NVIDIA's dedicated visual server
+    const visualServerUrl = 'https://ai.api.nvidia.com/v1';
 
     const res = await axios.post(
-      `${baseUrl}/images/generations`,
+      `${visualServerUrl}/images/generations`,
       { 
         model: model, 
         prompt: prompt.slice(0, 1000), // Prevent token overflow
@@ -186,8 +188,12 @@ class ImageService {
       }
     );
     
-    const b64 = res.data?.data?.[0]?.b64_json;
-    if (!b64) throw new Error('No base64 image data returned from NVIDIA NIM');
+    // Safely check for standard OpenAI format, falling back to NVIDIA native formatting if necessary
+    const b64 = res.data?.data?.[0]?.b64_json || res.data?.artifacts?.[0]?.base64;
+    
+    if (!b64) {
+      throw new Error(`No image data returned from NVIDIA NIM. Payload: ${JSON.stringify(res.data).slice(0,200)}`);
+    }
     
     return {
       buffer: Buffer.from(b64, 'base64'),

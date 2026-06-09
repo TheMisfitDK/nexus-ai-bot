@@ -186,7 +186,7 @@ module.exports = {
       },
       nvidia: {
         apiKey: cleanKey(process.env.NVIDIA_IMAGE_API_KEY),
-        models: ['qwen-image'],
+        models: ['qwen/qwen-image'], // Fixed the prefix here!
         enabled: !!cleanKey(process.env.NVIDIA_IMAGE_API_KEY),
         baseUrl: 'https://integrate.api.nvidia.com/v1',
       },

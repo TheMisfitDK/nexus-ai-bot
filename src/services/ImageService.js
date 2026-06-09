@@ -104,7 +104,6 @@ class ImageService {
       : '/v2beta/stable-image/generate/sd3';
 
     if (isSd3) {
-      // e.g. converting 'stable-diffusion-3-5-large' to API format if necessary
       form.append('model', 'sd3.5-large'); 
     }
 
@@ -167,15 +166,14 @@ class ImageService {
 
   async _nvidia(prompt, model = 'qwen/qwen-image') {
     const apiKey = config.imageGen.providers.nvidia.apiKey;
-    
-    // FIX: Override the text-only URL from config with NVIDIA's dedicated visual server
-    const visualServerUrl = 'https://ai.api.nvidia.com/v1';
+    const baseUrl = config.imageGen.providers.nvidia.baseUrl || 'https://integrate.api.nvidia.com/v1';
 
+    // Using the standard OpenAI-compatible generation endpoint that NVIDIA NIM supports
     const res = await axios.post(
-      `${visualServerUrl}/images/generations`,
+      `${baseUrl}/images/generations`,
       { 
         model: model, 
-        prompt: prompt.slice(0, 1000), // Prevent token overflow
+        prompt: prompt.slice(0, 1000), 
         response_format: 'b64_json' 
       },
       {
@@ -188,11 +186,11 @@ class ImageService {
       }
     );
     
-    // Safely check for standard OpenAI format, falling back to NVIDIA native formatting if necessary
+    // Check both standard standard b64_json format and native NVIDIA format
     const b64 = res.data?.data?.[0]?.b64_json || res.data?.artifacts?.[0]?.base64;
     
     if (!b64) {
-      throw new Error(`No image data returned from NVIDIA NIM. Payload: ${JSON.stringify(res.data).slice(0,200)}`);
+      throw new Error(`No base64 image data returned from NVIDIA NIM. Response data: ${JSON.stringify(res.data).substring(0, 200)}`);
     }
     
     return {

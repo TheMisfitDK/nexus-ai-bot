@@ -37,7 +37,6 @@ class ImageService {
         case 'together': return await this._together(prompt, useModel);
         case 'huggingface': return await this._huggingface(prompt, useModel);
         case 'fal': return await this._fal(prompt, useModel);
-        case 'nvidia': return await this._nvidia(prompt, useModel);
         default: throw new Error(`Unknown image provider: ${provider}`);
       }
     } catch (err) {
@@ -50,7 +49,7 @@ class ImageService {
       }
 
       logger.error(`Image gen error [${provider}]: ${apiErrorDetails}`);
-      
+
       // Try fallback provider
       const fallback = this._getBestProvider(attempted);
       if (fallback) {
@@ -63,7 +62,7 @@ class ImageService {
 
   // Modified to accept an array of already-tried providers
   _getBestProvider(excludeArray = []) {
-    const order = ['stability', 'dalle', 'together', 'nvidia', 'fal', 'huggingface'];
+    const order = ['stability', 'dalle', 'together', 'fal', 'huggingface'];
     for (const name of order) {
       if (!excludeArray.includes(name) && config.imageGen.providers[name]?.enabled) {
         return name;
@@ -162,42 +161,6 @@ class ImageService {
     if (!url) throw new Error('No image URL from fal.ai');
     const imgRes = await axios.get(url, { responseType: 'arraybuffer', timeout: 30000 });
     return { buffer: Buffer.from(imgRes.data), provider: 'fal.ai/FLUX', model };
-  }
-
-  async _nvidia(prompt, model = 'qwen/qwen-image') {
-    const apiKey = config.imageGen.providers.nvidia.apiKey;
-    const baseUrl = config.imageGen.providers.nvidia.baseUrl || 'https://integrate.api.nvidia.com/v1';
-
-    // Using the standard OpenAI-compatible generation endpoint that NVIDIA NIM supports
-    const res = await axios.post(
-      `${baseUrl}/images/generations`,
-      { 
-        model: model, 
-        prompt: prompt.slice(0, 1000), 
-        response_format: 'b64_json' 
-      },
-      {
-        headers: { 
-          Authorization: `Bearer ${apiKey}`, 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        timeout: 60000,
-      }
-    );
-    
-    // Check both standard standard b64_json format and native NVIDIA format
-    const b64 = res.data?.data?.[0]?.b64_json || res.data?.artifacts?.[0]?.base64;
-    
-    if (!b64) {
-      throw new Error(`No base64 image data returned from NVIDIA NIM. Response data: ${JSON.stringify(res.data).substring(0, 200)}`);
-    }
-    
-    return {
-      buffer: Buffer.from(b64, 'base64'),
-      provider: 'NVIDIA NIM/Qwen', 
-      model
-    };
   }
 }
 

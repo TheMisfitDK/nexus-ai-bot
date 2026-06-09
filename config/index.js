@@ -140,7 +140,7 @@ module.exports = {
         defaultModel: 'HuggingFaceH4/zephyr-7b-beta',
         models: ['microsoft/Phi-3-mini-4k-instruct', 'HuggingFaceH4/zephyr-7b-beta'],
         free: true,
-        baseUrl: 'https://api-inference.huggingface.co/models',
+        baseUrl: 'https://router.huggingface.co/hf-inference/models',
       },
       cohere: {
         apiKey: cleanKey(process.env.COHERE_API_KEY),
@@ -176,7 +176,7 @@ module.exports = {
         apiKey: cleanKey(process.env.HUGGINGFACE_API_KEY),
         models: ['stabilityai/stable-diffusion-xl-base-1.0', 'runwayml/stable-diffusion-v1-5'],
         enabled: !!cleanKey(process.env.HUGGINGFACE_API_KEY),
-        baseUrl: 'https://api-inference.huggingface.co/models',
+        baseUrl: 'https://router.huggingface.co/hf-inference/models',
       },
       fal: {
         apiKey: cleanKey(process.env.FAL_API_KEY),

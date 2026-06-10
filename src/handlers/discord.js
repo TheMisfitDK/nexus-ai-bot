@@ -15,6 +15,7 @@ const { Note, Feedback } = require('../models');
 const logger = require('../utils/logger');
 const { chunkText } = require('../utils/formatter');
 const { analyzeImage } = require('../utils/imageUtils');
+const { transcribeAudio } = require('../utils/audioUtils');
 const { extractFileContent } = require('../utils/fileUtils');
 
 const C = { primary: 0x5865F2, success: 0x57F287, error: 0xED4245, warn: 0xFEE75C };
@@ -41,6 +42,13 @@ function formatTokens(n) {
   return Number(n).toLocaleString();
 }
 
+// Supported document/file mime types for file analysis
+const ALLOWED_FILE_MIMES = [
+  'text/', 'application/pdf', 'application/json',
+  'application/msword', 'application/vnd.openxmlformats',
+];
+const ALLOWED_FILE_EXTS = /\.(txt|pdf|json|csv|md|js|py|ts|java|cpp|c|go|rs|html|css|docx|doc)$/i;
+
 class DiscordBot {
   constructor() {
     if (!config.platforms.discord.token) {
@@ -61,7 +69,11 @@ class DiscordBot {
 
   _buildCommands() {
     this.slashCommands = [
-      new SlashCommandBuilder().setName('chat').setDescription('Chat with AI')
+      // ── PRIMARY chat command ─────────────────────────────────────────────
+      new SlashCommandBuilder().setName('nexus').setDescription('Chat with AI (works in any channel!)')
+        .addStringOption(o => o.setName('query').setDescription('Your message or question').setRequired(true)),
+
+      new SlashCommandBuilder().setName('chat').setDescription('Chat with AI (with conversation context)')
         .addStringOption(o => o.setName('message').setDescription('Your message').setRequired(true)),
       new SlashCommandBuilder().setName('ask').setDescription('Single question (no context)')
         .addStringOption(o => o.setName('question').setDescription('Question').setRequired(true)),
@@ -97,10 +109,10 @@ class DiscordBot {
         .addStringOption(o => o.setName('message').setDescription('Feedback').setRequired(true)),
       new SlashCommandBuilder().setName('help').setDescription('Show help'),
 
-      // ── Owner-only commands (silently ignored for non-owners) ──
+      // ── Owner-only commands ──────────────────────────────────────────────
       new SlashCommandBuilder().setName('authorize').setDescription('[Owner] Authorize a user')
         .addStringOption(o => o.setName('user_id').setDescription('Discord user ID').setRequired(true))
-        .addIntegerOption(o => o.setName('tokens').setDescription('Token grant amount (default from config)')),
+        .addIntegerOption(o => o.setName('tokens').setDescription('Token grant amount')),
       new SlashCommandBuilder().setName('deauthorize').setDescription('[Owner] Revoke a user\'s access')
         .addStringOption(o => o.setName('user_id').setDescription('Discord user ID').setRequired(true)),
       new SlashCommandBuilder().setName('addtokens').setDescription('[Owner] Add tokens to a user')
@@ -129,7 +141,7 @@ class DiscordBot {
 
     client.once(Events.ClientReady, async () => {
       logger.info(`🎮 Discord ready: ${client.user.tag}`);
-      client.user.setActivity('AI-powered conversations | /help', { type: 3 });
+      client.user.setActivity('Type /nexus <question> to chat!', { type: 3 });
       await this.deployCommands();
     });
 
@@ -146,15 +158,17 @@ class DiscordBot {
       }
     });
 
+    // ── MessageCreate — DMs and @mentions only (no auto-channel detection) ───
     client.on(Events.MessageCreate, async (message) => {
       if (message.author.bot) return;
-      if (!message.content && message.attachments.size === 0) return;
+
       const isDM = !message.guild;
       const isMentioned = message.mentions.has(client.user);
-      const isAIChannel = /\b(ai|chat|bot|gpt|nexus)\b/i.test(message.channel.name || '');
-      if (!isDM && !isMentioned && !isAIChannel) return;
 
-      let content = message.content.replace(`<@${client.user.id}>`, '').trim();
+      // Only respond in: DMs (always) or explicit @mentions in servers
+      // Plain server messages are handled via /nexus slash command
+      if (!isDM && !isMentioned) return;
+
       const userId = `discord:${message.author.id}`;
       const chatId = String(message.channel.id);
 
@@ -168,16 +182,86 @@ class DiscordBot {
         return message.reply({ embeds: [noAccessEmbed(user)] });
       }
 
-      // Image attachment
+      // Strip the @mention from content
+      let content = message.content.replace(`<@${client.user.id}>`, '').trim();
+
       const attachment = message.attachments.first();
+
+      // ── Image attachment ─────────────────────────────────────────────────
       if (attachment?.contentType?.startsWith('image/')) {
         await message.channel.sendTyping();
-        const result = await analyzeImage(attachment.url, content || 'Describe this image.', user.aiProvider, user.aiModel);
-        const embed = new EmbedBuilder().setColor(C.primary).setDescription(result)
-          .setFooter({ text: `${user.aiProvider} / ${user.aiModel}` });
-        return message.reply({ embeds: [embed] });
+        try {
+          const result = await analyzeImage(attachment.url, content || 'Describe this image in detail.', user.aiProvider, user.aiModel);
+          const embed = new EmbedBuilder().setColor(C.primary)
+            .setTitle('👁️ Image Analysis')
+            .setDescription(result.slice(0, 4096))
+            .setFooter({ text: `${user.aiProvider} / ${user.aiModel}` });
+          if (!isOwner(message.author.id)) await userService.incrementUsage(userId);
+          return message.reply({ embeds: [embed] });
+        } catch (err) {
+          logger.error(`Discord image analysis: ${err.message}`);
+          return message.reply(`❌ Image analysis failed: ${err.message}`);
+        }
       }
 
+      // ── Audio/voice attachment (Discord voice messages) ──────────────────
+      if (attachment && (
+        attachment.contentType?.startsWith('audio/') ||
+        attachment.flags?.has('IS_VOICE_MESSAGE') ||
+        /\.(ogg|mp3|wav|webm|m4a|flac)$/i.test(attachment.name || '')
+      )) {
+        await message.channel.sendTyping();
+        try {
+          const transcript = await transcribeAudio(attachment.url, attachment.name || 'audio.ogg');
+          if (!transcript) return message.reply('❌ Could not transcribe audio.');
+          const transcriptEmbed = new EmbedBuilder().setColor(C.warn)
+            .setTitle('🎤 Transcription')
+            .setDescription(transcript.slice(0, 4096));
+          await message.reply({ embeds: [transcriptEmbed] });
+          // Also run the transcript through AI
+          await this._processMessage(message, transcript, user, userId, chatId);
+          return;
+        } catch (err) {
+          logger.error(`Discord audio transcription: ${err.message}`);
+          return message.reply(`❌ Transcription failed: ${err.message}`);
+        }
+      }
+
+      // ── Document/file attachment ─────────────────────────────────────────
+      if (attachment && (
+        ALLOWED_FILE_MIMES.some(t => attachment.contentType?.startsWith(t)) ||
+        ALLOWED_FILE_EXTS.test(attachment.name || '')
+      )) {
+        await message.channel.sendTyping();
+        try {
+          const fileContent = await extractFileContent(attachment.url, attachment.contentType, attachment.name);
+          const caption = content || 'Analyze this file and give a comprehensive summary.';
+          const result = await aiService.chat({
+            provider: user.aiProvider, model: user.aiModel,
+            messages: [
+              { role: 'system', content: 'You are analyzing an uploaded file. Be thorough and helpful.' },
+              { role: 'user', content: `File: ${attachment.name}\n\n${fileContent.slice(0, 8000)}\n\nRequest: ${caption}` },
+            ],
+            maxTokens: user.maxTokens || 2048,
+          });
+          if (!isOwner(message.author.id)) await userService.incrementUsage(userId, result.tokensUsed || 0);
+          const chunks = chunkText(result.content, 2000);
+          for (let i = 0; i < chunks.length; i++) {
+            const embed = new EmbedBuilder().setColor(C.primary)
+              .setTitle(i === 0 ? '📄 File Analysis' : null)
+              .setDescription(chunks[i])
+              .setFooter(i === 0 ? { text: `${user.aiProvider}/${user.aiModel} • ${attachment.name}` } : null);
+            if (i === 0) await message.reply({ embeds: [embed] });
+            else await message.channel.send({ embeds: [embed] });
+          }
+          return;
+        } catch (err) {
+          logger.error(`Discord file analysis: ${err.message}`);
+          return message.reply(`❌ File analysis failed: ${err.message}`);
+        }
+      }
+
+      // ── Plain text / chat ────────────────────────────────────────────────
       if (!content) return;
       await message.channel.sendTyping();
       await this._processMessage(message, content, user, userId, chatId);
@@ -217,9 +301,8 @@ class DiscordBot {
 
     if (cmd === 'deauthorize') {
       if (!isOwner(interaction.user.id)) return interaction.reply({ content: '🔒 Owner only.', ephemeral: true });
-      const targetId = interaction.options.getString('user_id');
-      await userService.revokeAuth(`discord:${targetId}`);
-      return interaction.reply({ content: `🔒 Revoked access for \`${targetId}\``, ephemeral: true });
+      await userService.revokeAuth(`discord:${interaction.options.getString('user_id')}`);
+      return interaction.reply({ content: `🔒 Revoked access for \`${interaction.options.getString('user_id')}\``, ephemeral: true });
     }
 
     if (cmd === 'addtokens') {
@@ -250,17 +333,21 @@ class DiscordBot {
         users.forEach((u, i) => {
           const [, id] = u.userId.split(':');
           const name = u.username || u.firstName || id;
-          embed.addFields({
-            name: `${i + 1}. ${name} (${id})`,
-            value: `💰 ${formatTokens(u.tokenBalance)} tokens | 📨 ${u.totalMessages} msgs`,
-          });
+          embed.addFields({ name: `${i + 1}. ${name} (${id})`, value: `💰 ${formatTokens(u.tokenBalance)} tokens | 📨 ${u.totalMessages} msgs` });
         });
       }
       return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
-    // ── Regular commands ─────────────────────────────────────────────────────
-    if (cmd === 'chat') {
+    // ── /nexus — PRIMARY command ─────────────────────────────────────────────
+    if (cmd === 'nexus') {
+      await interaction.deferReply();
+      if (!hasAccess(user, interaction.user.id)) {
+        return interaction.editReply({ embeds: [noAccessEmbed(user)] });
+      }
+      await this._processInteraction(interaction, interaction.options.getString('query'), user, userId, chatId);
+
+    } else if (cmd === 'chat') {
       await interaction.deferReply();
       if (!hasAccess(user, interaction.user.id)) {
         return interaction.editReply({ embeds: [noAccessEmbed(user)] });
@@ -433,18 +520,16 @@ class DiscordBot {
     } else if (cmd === 'help') {
       const ownerAccess = isOwner(interaction.user.id);
       const embed = new EmbedBuilder().setColor(C.primary).setTitle(`⚡ ${config.app.name} Help`)
-        .setDescription('Multi-provider AI chatbot — mention me or DM me to chat!')
+        .setDescription('Multi-provider AI chatbot — use `/nexus <question>` in any channel!')
         .addFields(
+          { name: '⚡ Primary', value: '`/nexus <question>` — chat from any channel' },
           { name: '💬 Chat', value: '`/chat` `/ask` `/new` `/clear` `/summarize` `/export`' },
           { name: '🤖 AI', value: '`/model` `/persona` `/system` `/temp`' },
           { name: '🛠️ Tools', value: '`/image` `/translate` `/remind` `/reminders`' },
           { name: '📝 Notes', value: '`/note` `/notes`' },
           { name: '📊 Account', value: '`/stats` `/settings` `/feedback`' },
-          ...(ownerAccess ? [{
-            name: '👑 Owner',
-            value: '`/authorize` `/deauthorize` `/addtokens` `/authed`',
-          }] : []),
-          { name: '💡 Tip', value: 'Mention me in any channel or DM me to chat!' },
+          ...(ownerAccess ? [{ name: '👑 Owner', value: '`/authorize` `/deauthorize` `/addtokens` `/authed`' }] : []),
+          { name: '💡 Also works', value: 'DM me, @mention me, or attach images/files/voice messages!' },
         );
       await interaction.reply({ embeds: [embed], ephemeral: true });
     }
@@ -510,11 +595,11 @@ class DiscordBot {
         await contextService.addMessage(userId, chatId, 'user', text);
         await contextService.addMessage(userId, chatId, 'assistant', result.content, { provider: user.aiProvider, model: user.aiModel });
       }
-      // Owner bypass — don't deduct tokens
       if (!isOwner(message.author.id)) {
         await userService.incrementUsage(userId, result.tokensUsed || 0);
       }
     } catch (err) {
+      logger.error(`Discord _processMessage: ${err.message}`);
       await message.reply(`❌ ${err.message}`);
     }
   }
@@ -548,6 +633,7 @@ class DiscordBot {
         await userService.incrementUsage(userId, result.tokensUsed || 0);
       }
     } catch (err) {
+      logger.error(`Discord _processInteraction: ${err.message}`);
       await interaction.editReply(`❌ ${err.message}`);
     }
   }

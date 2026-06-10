@@ -20,10 +20,6 @@ function isOwner(ctx) {
   return String(ctx.from.id) === config.app.ownerIdTelegram;
 }
 
-/**
- * Returns true if this user has access (owner bypasses all checks).
- * Regular users need isAuthorized=true and tokenBalance > 0.
- */
 function hasAccess(ctx) {
   if (isOwner(ctx)) return true;
   return ctx.nexusUser && ctx.nexusUser.canSendMessage();
@@ -31,6 +27,11 @@ function hasAccess(ctx) {
 
 function formatTokens(n) {
   return Number(n).toLocaleString();
+}
+
+function isGroupChat(ctx) {
+  const t = ctx.chat?.type;
+  return t === 'group' || t === 'supergroup' || t === 'channel';
 }
 
 // ── Bot class ─────────────────────────────────────────────────────────────────
@@ -85,12 +86,15 @@ class TelegramBot {
           ? `✅ *Authorized* — ${formatTokens(u.tokenBalance)} tokens remaining`
           : `🔒 *Not authorized* — contact the owner to get access`;
 
+      const groupHint = isGroupChat(ctx)
+        ? `\n\n💡 *In groups, use* \`/nexus <question>\` *to chat*`
+        : '';
+
       await ctx.replyWithMarkdown(
         `⚡ *Welcome to ${config.app.name}, ${name}!*\n\n` +
         `I'm your AI assistant powered by ${aiService.getAvailableProviders().length}+ AI models.\n\n` +
         `*Provider:* \`${u.aiProvider}/${u.aiModel}\`\n` +
-        `${statusLine}\n\n` +
-        `Just send a message to start chatting!\n` +
+        `${statusLine}${groupHint}\n\n` +
         `Use /help to see all commands.`,
         Markup.keyboard([
           ['💬 New Chat', '🤖 Models', '🎨 Image'],
@@ -112,9 +116,14 @@ class TelegramBot {
           `/unban \\<id\\> — Unban user\n`
         : '';
 
+      const groupNote = isGroupChat(ctx)
+        ? `\n*💡 Group usage:* \`/nexus <question>\` to chat\\.\n`
+        : '';
+
       await ctx.replyWithMarkdown(
         `*📚 ${config.app.name} Commands*\n\n` +
         `*🤖 AI:*\n` +
+        `/nexus \\<query\\> — Chat with AI \\(works everywhere\\)\\!\n` +
         `/model — Switch AI provider & model\n` +
         `/persona — Set AI personality\n` +
         `/system \\<prompt\\> — Custom system prompt\n` +
@@ -138,12 +147,25 @@ class TelegramBot {
         `*📊 Account:*\n` +
         `/stats — Your usage & token balance\n` +
         `/feedback \\<text\\> — Send feedback\n` +
-        `${ownerSection}\n` +
+        `${ownerSection}${groupNote}\n` +
         `*Send photos* for vision analysis\n` +
         `*Send voice* for transcription\n` +
         `*Send files* \\(PDF/DOCX/TXT\\) for analysis`,
         { parse_mode: 'MarkdownV2' }
-      ).catch(() => ctx.reply('Use /model /persona /system /temp /new /clear /summarize /export /image /translate /remind /reminders /note /notes /stats /feedback'));
+      ).catch(() => ctx.reply('Use /nexus <query> to chat. Other commands: /model /persona /system /temp /new /clear /summarize /export /image /translate /remind /reminders /note /notes /stats /feedback'));
+    });
+
+    // ── /nexus — PRIMARY chat command (works in groups AND private) ──────────
+    bot.command('nexus', async (ctx) => {
+      const query = ctx.message.text.replace(/^\/nexus(@\S+)?\s*/i, '').trim();
+      if (!query) {
+        return ctx.reply(
+          '💬 Usage: /nexus <your question>\n\nExample: /nexus Explain quantum computing in simple terms',
+          { reply_to_message_id: ctx.message.message_id }
+        );
+      }
+      if (!hasAccess(ctx)) return ctx.reply(_noAccessMessage(ctx.nexusUser), { reply_to_message_id: ctx.message.message_id });
+      await this._processMessage(ctx, query, ctx.nexusUser);
     });
 
     // /model
@@ -199,7 +221,7 @@ class TelegramBot {
       await ctx.reply(`🌡️ Temperature set to ${val}`);
     });
 
-    // /tokens (max response tokens setting, not balance)
+    // /tokens
     bot.command('tokens', async (ctx) => {
       const val = parseInt(ctx.message.text.slice('/tokens'.length).trim());
       if (isNaN(val) || val < 100 || val > 8000) return ctx.reply('Usage: /tokens <100-8000>');
@@ -425,7 +447,6 @@ class TelegramBot {
 
     // ── Owner-only commands ──────────────────────────────────────────────────
 
-    // /auth <telegram_user_id> [tokens]
     bot.command('auth', async (ctx) => {
       if (!isOwner(ctx)) return;
       const args = ctx.message.text.slice('/auth'.length).trim().split(/\s+/);
@@ -434,7 +455,6 @@ class TelegramBot {
       const tokens = args[1] ? parseInt(args[1]) : config.app.defaultTokenGrant;
       if (isNaN(tokens) || tokens <= 0) return ctx.reply('❌ Invalid token amount.');
       const userId = `telegram:${targetId}`;
-      // Ensure the user exists
       await userService.getOrCreate('telegram', targetId, {});
       const user = await userService.authorizeUser(userId, tokens);
       await ctx.reply(
@@ -445,7 +465,6 @@ class TelegramBot {
       );
     });
 
-    // /deauth <telegram_user_id>
     bot.command('deauth', async (ctx) => {
       if (!isOwner(ctx)) return;
       const targetId = ctx.message.text.slice('/deauth'.length).trim();
@@ -454,7 +473,6 @@ class TelegramBot {
       await ctx.reply(`🔒 Revoked access for \`${targetId}\``, { parse_mode: 'Markdown' });
     });
 
-    // /addtokens <telegram_user_id> <amount>
     bot.command('addtokens', async (ctx) => {
       if (!isOwner(ctx)) return;
       const args = ctx.message.text.slice('/addtokens'.length).trim().split(/\s+/);
@@ -471,7 +489,6 @@ class TelegramBot {
       );
     });
 
-    // /authed — list authorized users
     bot.command('authed', async (ctx) => {
       if (!isOwner(ctx)) return;
       const users = await userService.getAuthorizedUsers(30);
@@ -485,7 +502,6 @@ class TelegramBot {
       await ctx.replyWithMarkdown(text);
     });
 
-    // Admin: /broadcast
     bot.command('broadcast', async (ctx) => {
       if (!isOwner(ctx)) return;
       const text = ctx.message.text.slice('/broadcast'.length).trim();
@@ -503,7 +519,6 @@ class TelegramBot {
       await ctx.reply(`📢 Done!\n✅ Sent: ${sent}\n❌ Failed: ${failed}`);
     });
 
-    // Admin: /ban
     bot.command('ban', async (ctx) => {
       if (!isOwner(ctx)) return;
       const args = ctx.message.text.slice('/ban'.length).trim().split(' ');
@@ -511,7 +526,6 @@ class TelegramBot {
       await ctx.reply(`✅ Banned: ${args[0]}`);
     });
 
-    // Admin: /unban
     bot.command('unban', async (ctx) => {
       if (!isOwner(ctx)) return;
       const id = ctx.message.text.slice('/unban'.length).trim();
@@ -523,9 +537,9 @@ class TelegramBot {
   _setupHandlers() {
     const { bot } = this;
 
-    // Photo
+    // ── Photo — works everywhere ──────────────────────────────────────────────
     bot.on('photo', async (ctx) => {
-      if (!hasAccess(ctx)) return ctx.reply(_noAccessMessage(ctx.nexusUser));
+      if (!hasAccess(ctx)) return ctx.reply(_noAccessMessage(ctx.nexusUser), { reply_to_message_id: ctx.message.message_id });
       const msg = await ctx.reply('👁️ Analyzing image...');
       try {
         const photo = ctx.message.photo.pop();
@@ -538,38 +552,65 @@ class TelegramBot {
           .catch(() => ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `👁️ Image Analysis:\n\n${chunks[0]}`));
         for (let i = 1; i < chunks.length; i++) await ctx.reply(chunks[i]);
       } catch (e) {
-        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ ${e.message}`);
+        logger.error(`Photo handler: ${e.message}`);
+        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ Image analysis failed: ${e.message}`);
       }
     });
 
-    // Voice
+    // ── Voice — works everywhere ──────────────────────────────────────────────
     bot.on('voice', async (ctx) => {
-      if (!hasAccess(ctx)) return ctx.reply(_noAccessMessage(ctx.nexusUser));
+      if (!hasAccess(ctx)) return ctx.reply(_noAccessMessage(ctx.nexusUser), { reply_to_message_id: ctx.message.message_id });
       const msg = await ctx.reply('🎤 Transcribing...');
       try {
-        const fileUrl = await ctx.telegram.getFileLink(ctx.message.voice.file_id);
-        const transcript = await transcribeAudio(fileUrl.href);
-        if (!transcript) return ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, '❌ Could not transcribe.');
+        const voice = ctx.message.voice;
+        const fileLink = await ctx.telegram.getFileLink(voice.file_id);
+        const transcript = await transcribeAudio(fileLink.href, 'audio.ogg');
+        if (!transcript) {
+          return ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, '❌ Could not transcribe audio.');
+        }
+        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `🎤 *Transcription:*\n${transcript}`, { parse_mode: 'Markdown' });
+        // Process the transcription as a message
+        await this._processMessage(ctx, transcript, ctx.nexusUser);
+      } catch (e) {
+        logger.error(`Voice handler: ${e.message}`);
+        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ Transcription failed: ${e.message}`);
+      }
+    });
+
+    // ── Video note (circle video) — transcribe audio track ───────────────────
+    bot.on('video_note', async (ctx) => {
+      if (!hasAccess(ctx)) return ctx.reply(_noAccessMessage(ctx.nexusUser), { reply_to_message_id: ctx.message.message_id });
+      const msg = await ctx.reply('🎤 Transcribing video note...');
+      try {
+        const fileLink = await ctx.telegram.getFileLink(ctx.message.video_note.file_id);
+        const transcript = await transcribeAudio(fileLink.href, 'audio.mp4');
+        if (!transcript) {
+          return ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, '❌ Could not transcribe.');
+        }
         await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `🎤 *Transcription:*\n${transcript}`, { parse_mode: 'Markdown' });
         await this._processMessage(ctx, transcript, ctx.nexusUser);
       } catch (e) {
-        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ ${e.message}`);
+        logger.error(`Video note handler: ${e.message}`);
+        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ Transcription failed: ${e.message}`);
       }
     });
 
-    // Document
+    // ── Document — works everywhere ───────────────────────────────────────────
     bot.on('document', async (ctx) => {
       const doc = ctx.message.document;
       const allowed = ['text/', 'application/pdf', 'application/json', 'application/msword', 'application/vnd.openxmlformats'];
       const isAllowed = allowed.some(t => doc.mime_type?.startsWith(t)) ||
-        /\.(txt|pdf|json|csv|md|js|py|ts|java|cpp|c|go|rs|html|css)$/i.test(doc.file_name || '');
-      if (!isAllowed) return ctx.reply('⚠️ Unsupported file type. Send: txt, pdf, json, csv, md, or code files.');
+        /\.(txt|pdf|json|csv|md|js|py|ts|java|cpp|c|go|rs|html|css|docx|doc)$/i.test(doc.file_name || '');
+      if (!isAllowed) return ctx.reply('⚠️ Unsupported file type. Send: txt, pdf, docx, json, csv, md, or code files.');
+
+      if (!hasAccess(ctx)) return ctx.reply(_noAccessMessage(ctx.nexusUser), { reply_to_message_id: ctx.message.message_id });
 
       const msg = await ctx.reply('📄 Reading file...');
       try {
         const fileUrl = await ctx.telegram.getFileLink(doc.file_id);
         const content = await extractFileContent(fileUrl.href, doc.mime_type, doc.file_name);
         const caption = ctx.message.caption || 'Analyze this file and give a comprehensive summary.';
+
         const result = await aiService.chat({
           provider: ctx.nexusUser.aiProvider,
           model: ctx.nexusUser.aiModel,
@@ -579,21 +620,24 @@ class TelegramBot {
           ],
           maxTokens: ctx.nexusUser.maxTokens || 2048,
         });
+
         if (!isOwner(ctx)) await userService.incrementUsage(ctx.userId, result.tokensUsed || 0);
         const chunks = chunkText(result.content, 4000);
         await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `📄 *File Analysis:*\n\n${chunks[0]}`, { parse_mode: 'Markdown' })
           .catch(() => ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `📄 File Analysis:\n\n${chunks[0]}`));
         for (let i = 1; i < chunks.length; i++) await ctx.reply(chunks[i]);
       } catch (e) {
-        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ ${e.message}`);
+        logger.error(`Document handler: ${e.message}`);
+        await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `❌ File analysis failed: ${e.message}`);
       }
     });
 
-    // Text messages
+    // ── Text messages ─────────────────────────────────────────────────────────
     bot.on('text', async (ctx) => {
       const text = ctx.message.text;
       if (text.startsWith('/')) return;
 
+      // Keyboard button shortcuts (always work)
       const keyMap = {
         '💬 New Chat': '/new',
         '🤖 Models': '/model',
@@ -609,13 +653,20 @@ class TelegramBot {
         ).catch(() => {});
       }
 
+      // ── Group/supergroup/channel: only /nexus command responds ──────────────
+      if (isGroupChat(ctx)) {
+        // Silently ignore plain text in groups — use /nexus <query>
+        return;
+      }
+
+      // ── Private DM: respond normally ─────────────────────────────────────────
       await this._processMessage(ctx, text, ctx.nexusUser);
     });
   }
 
   async _processMessage(ctx, text, user) {
     if (!hasAccess(ctx)) {
-      return ctx.reply(_noAccessMessage(user));
+      return ctx.reply(_noAccessMessage(user), { reply_to_message_id: ctx.message?.message_id });
     }
 
     await ctx.sendChatAction('typing');
@@ -680,7 +731,6 @@ class TelegramBot {
         });
       }
 
-      // Owner usage tracked for stats but does NOT deduct tokens
       if (!isOwner(ctx)) {
         await userService.incrementUsage(ctx.userId, result.tokensUsed || 0);
       }
@@ -747,18 +797,9 @@ class TelegramBot {
       await ctx.answerCbQuery(`Memory ${!u.memoryEnabled ? 'enabled' : 'disabled'}`);
     });
 
-    bot.action('settings:provider', async (ctx) => {
-      await ctx.answerCbQuery();
-      await ctx.reply('Use /model to switch provider');
-    });
-    bot.action('settings:persona', async (ctx) => {
-      await ctx.answerCbQuery();
-      await ctx.reply('Use /persona to change persona');
-    });
-    bot.action('settings:temp', async (ctx) => {
-      await ctx.answerCbQuery();
-      await ctx.reply('Use /temp <0.0-2.0> to set temperature');
-    });
+    bot.action('settings:provider', async (ctx) => { await ctx.answerCbQuery(); await ctx.reply('Use /model to switch provider'); });
+    bot.action('settings:persona',  async (ctx) => { await ctx.answerCbQuery(); await ctx.reply('Use /persona to change persona'); });
+    bot.action('settings:temp',     async (ctx) => { await ctx.answerCbQuery(); await ctx.reply('Use /temp <0.0-2.0> to set temperature'); });
   }
 
   registerReminderDispatcher() {
@@ -772,20 +813,21 @@ class TelegramBot {
     this.registerReminderDispatcher();
 
     await this.bot.telegram.setMyCommands([
-      { command: 'start', description: '⚡ Start the bot' },
-      { command: 'help', description: '📚 All commands' },
-      { command: 'model', description: '🤖 Switch AI model' },
-      { command: 'persona', description: '🎭 Set personality' },
-      { command: 'system', description: '🧠 Custom system prompt' },
-      { command: 'image', description: '🎨 Generate image' },
-      { command: 'new', description: '🆕 New conversation' },
-      { command: 'clear', description: '🗑️ Clear history' },
-      { command: 'summarize', description: '📊 Summarize chat' },
-      { command: 'translate', description: '🌐 Translate text' },
-      { command: 'remind', description: '⏰ Set reminder' },
-      { command: 'note', description: '📝 Save note' },
-      { command: 'stats', description: '📈 Your stats' },
-      { command: 'settings', description: '⚙️ Settings' },
+      { command: 'nexus',      description: '💬 Chat with AI (works in groups!)' },
+      { command: 'start',      description: '⚡ Start the bot' },
+      { command: 'help',       description: '📚 All commands' },
+      { command: 'model',      description: '🤖 Switch AI model' },
+      { command: 'persona',    description: '🎭 Set personality' },
+      { command: 'system',     description: '🧠 Custom system prompt' },
+      { command: 'image',      description: '🎨 Generate image' },
+      { command: 'new',        description: '🆕 New conversation' },
+      { command: 'clear',      description: '🗑️ Clear history' },
+      { command: 'summarize',  description: '📊 Summarize chat' },
+      { command: 'translate',  description: '🌐 Translate text' },
+      { command: 'remind',     description: '⏰ Set reminder' },
+      { command: 'note',       description: '📝 Save note' },
+      { command: 'stats',      description: '📈 Your stats' },
+      { command: 'settings',   description: '⚙️ Settings' },
     ]).catch(e => logger.warn(`Could not set commands: ${e.message}`));
 
     this.bot.launch({ dropPendingUpdates: true });
@@ -796,13 +838,12 @@ class TelegramBot {
   }
 }
 
-// ── Shared helper (module-level) ─────────────────────────────────────────────
+// ── Shared helper ─────────────────────────────────────────────────────────────
 
 function _noAccessMessage(user) {
   if (!user || !user.isAuthorized) {
     return '🔒 You are not authorized to use this bot.\nContact the owner to request access.';
   }
-  // Authorized but out of tokens
   return '⚠️ Your token balance is empty.\nContact the owner to get more tokens.';
 }
 

@@ -53,7 +53,8 @@ Deploys anywhere: Railway, Heroku, Render, Docker, VPS.
 ### 🧠 AI Core
 - **Streaming responses** — real-time typewriter output on both platforms
 - **Conversation memory** — full context window, persisted to MongoDB
-- **Hot-swap providers** — change model mid-conversation with `/model`
+- **Hot-swap providers** — change model mid-conversation with `/model`; fetches **live model list** from provider API on every click
+- **Live model detection** — `modelRegistry` queries each provider's API at runtime; 1-hour cache, falls back to static list on error
 - **12 AI Personas** — Teacher, Coder, Creative, Analyst, Therapist, Comedian, Scientist, Chef, Lawyer, Finance, and more
 - **Custom system prompts** — per-user, persistent across sessions
 - **Temperature control** — tune from deterministic to creative (`/temp 0.0–2.0`)
@@ -180,7 +181,7 @@ pm2 save && pm2 startup
 | `/nexus <query>` | **Chat with AI — works in groups and DMs** |
 | `/start` | Welcome message + status |
 | `/help` | Full command reference |
-| `/model` | Switch AI provider & model (inline menu) |
+| `/model` | Switch AI provider & model — fetches live models from API on click |
 | `/persona` | Set AI personality (12 options) |
 | `/system <prompt>` | Set custom system instruction |
 | `/temp <0.0–2.0>` | Adjust response randomness |
@@ -216,7 +217,7 @@ pm2 save && pm2 startup
 | `/nexus <query>` | **Chat with AI — works in any channel** |
 | `/chat <message>` | Chat with conversation context |
 | `/ask <question>` | Single question, no context |
-| `/model` | Switch AI provider/model (select menu) |
+| `/model` | Switch AI provider/model — fetches live models from API on click |
 | `/persona` | Set AI personality |
 | `/system <prompt>` | Set custom system prompt |
 | `/temp <value>` | Set temperature 0.0–2.0 |
@@ -277,7 +278,8 @@ nexus-ai-bot/
 │       ├── formatter.js          # Text chunking, escaping, truncation
 │       ├── imageUtils.js         # Vision: OpenAI / Grok / Google / Anthropic
 │       ├── audioUtils.js         # Whisper transcription: OpenAI + Groq fallback
-│       └── fileUtils.js          # PDF (pdf-parse), DOCX (mammoth), CSV, JSON
+│       ├── fileUtils.js          # PDF (pdf-parse), DOCX (mammoth), CSV, JSON
+│       └── modelRegistry.js      # Live model fetcher per provider + 1hr cache
 ├── config/
 │   └── index.js                  # Central config from env vars
 ├── public/
@@ -304,12 +306,13 @@ nexus-ai-bot/
 | `DEFAULT_PROVIDER` | — | Default AI provider (default: `groq`) |
 | `DEFAULT_MODEL` | — | Default model (default: `llama-3.3-70b-versatile`) |
 | `IMAGE_GEN_PROVIDER` | — | Default image provider (default: `stability`) |
-| `DEFAULT_TOKEN_GRANT` | — | Tokens granted on `/auth` (default: `5000`) |
+| `DEFAULT_TOKEN_GRANT` | — | Tokens granted on `/auth` (default: `10000`) |
+| `AUTHORIZED_USERS` | — | Pre-authorize on boot: `telegram:123:5000,discord:456:10000` |
 | `GROQ_API_KEY` | — | Free at console.groq.com — default provider + Whisper fallback |
 | `OPENAI_API_KEY` | — | OpenAI GPT + Whisper transcription |
 | `ANTHROPIC_API_KEY` | — | Claude models + vision |
 | `GOOGLE_AI_API_KEY` | — | Gemini models + vision |
-| `GROK_API_KEY` | — | Grok models + vision |
+| `XAI_API_KEY` | — | xAI Grok models + vision |
 | `STABILITY_API_KEY` | — | Stability AI image generation |
 | `TOGETHER_API_KEY` | — | Together AI models + FLUX images |
 | `MISTRAL_API_KEY` | — | Mistral models |

@@ -19,9 +19,11 @@
 
 ## What is NexusAI?
 
-NexusAI is a production-ready AI chatbot that runs on both **Telegram** and **Discord** simultaneously. It abstracts 12+ AI providers behind a single clean interface — switch from GPT-4o to Claude to Gemini to LLaMA with one command, mid-conversation. All history, settings, and preferences persist in MongoDB.
+NexusAI is a production-ready AI chatbot running on **Telegram** and **Discord** simultaneously. Abstracts 12+ AI providers behind one interface — switch GPT-4o → Claude → Gemini → LLaMA mid-conversation with `/model`. All history, settings, and preferences persist in MongoDB.
 
-Built to deploy anywhere: Railway, Heroku, Render, Docker, or any VPS.
+**Key design:** bot only responds when explicitly called via `/nexus <query>` in groups/servers, keeping channels clean. DMs and @mentions always work.
+
+Deploys anywhere: Railway, Heroku, Render, Docker, VPS.
 
 ---
 
@@ -52,32 +54,42 @@ Built to deploy anywhere: Railway, Heroku, Render, Docker, or any VPS.
 - **Streaming responses** — real-time typewriter output on both platforms
 - **Conversation memory** — full context window, persisted to MongoDB
 - **Hot-swap providers** — change model mid-conversation with `/model`
-- **10 AI Personas** — Teacher, Coder, Creative, Analyst, Therapist, Chef, and more
+- **12 AI Personas** — Teacher, Coder, Creative, Analyst, Therapist, Comedian, Scientist, Chef, Lawyer, Finance, and more
 - **Custom system prompts** — per-user, persistent across sessions
 - **Temperature control** — tune from deterministic to creative (`/temp 0.0–2.0`)
-- **Token budget** — configurable max tokens per response
+- **Token budget** — configurable max tokens per response (`/tokens 100–8000`)
 
 ### 🛠️ Tools
-- **Image generation** — Stability AI (SD3/SDXL), DALL-E 3, FLUX via Together/fal.ai, HuggingFace — prompt via `/image`
-- **Vision / image analysis** — send any photo for AI description
-- **Voice transcription** — send voice messages, Whisper transcribes + replies
-- **File analysis** — upload PDF, DOCX, TXT, CSV, or code files for AI analysis
+- **Image generation** — Stability AI, DALL-E 3, FLUX via Together/fal.ai, HuggingFace — via `/image`
+- **Vision / image analysis** — send any photo; supports OpenAI, Grok, Google Gemini, **and Anthropic Claude** vision
+- **Voice transcription** — send voice messages; Whisper transcribes + passes to AI. Falls back to **Groq Whisper** if no OpenAI key
+- **File analysis** — PDF, DOCX, TXT, CSV, JSON, and code files. Correct MIME detection for all types
+- **Video note transcription** (Telegram) — circle video audio extracted and transcribed
+- **Discord voice messages** — native Discord voice message attachments transcribed automatically
 - **Translation** — any language pair via `/translate`
-- **Smart reminders** — natural language time parsing ("in 30 minutes", "tomorrow 9am"), recurring support
-- **Notes** — save, list, pin notes per user
-- **Conversation export** — download full history as Markdown or JSON
+- **Smart reminders** — natural language time parsing (`in 30 minutes`, `tomorrow 9am`)
+- **Notes** — save and list notes per user
+- **Conversation export** — full history as Markdown or JSON
 
-### 👤 Account & Plans (DISABLED)
-- **Free / Pro / Enterprise** tiers with daily message limits
-- **Referral system** — unique codes, track invite count
-- **Usage statistics** — message count, token usage, plan info
+### 🔒 Group Chat Design
+- **Telegram groups** — bot ignores all plain text; only responds to `/nexus <query>` and media (photos, voice, files)
+- **Discord servers** — bot ignores all channel messages; only responds to `/nexus`, other slash commands, or explicit @mentions
+- **DMs always work** — private chats respond to freeform text normally
+- Eliminates accidental triggers and token waste in busy servers
+
+### 👤 Account & Access
+- **Token-based access control** — owner grants token balances to users
+- **Usage statistics** — message count, tokens used, tokens granted, member since
 - **Context toggle** — disable history for stateless queries
 - **Memory mode** — AI remembers long-term preferences across conversations
+- **Per-user settings** — provider, model, persona, temperature, system prompt all persist
 
-### 👑 Admin
-- **Broadcast** — send announcements to all users
-- **Ban / unban** users with reason
-- **Upgrade users** to Pro (specify days)
+### 👑 Admin (Owner Only)
+- **Authorize / deauthorize** users with token grants
+- **Add tokens** to any user
+- **List authorized users** with balances and message counts
+- **Broadcast** announcements to all users (Telegram)
+- **Ban / unban** users
 - **Web dashboard** — real-time status at `/` with uptime + stats
 
 ---
@@ -107,12 +119,14 @@ TELEGRAM_BOT_TOKEN=       # @BotFather → /newbot
 DISCORD_BOT_TOKEN=        # discord.com/developers → New Application → Bot
 DISCORD_CLIENT_ID=        # same portal, Application ID
 MONGODB_URI=              # mongodb+srv://... (Atlas free works)
-GROQ_API_KEY=             # free at console.groq.com — used by default
+GROQ_API_KEY=             # free at console.groq.com — default provider
 BOT_OWNER_ID=             # your Telegram numeric user ID
 DISCORD_OWNER_ID=         # your Discord numeric user ID
 ```
 
 **Default provider is Groq** (free). To switch: set `DEFAULT_PROVIDER=openai` + `OPENAI_API_KEY=...`.
+
+**Voice transcription** uses OpenAI Whisper if `OPENAI_API_KEY` is set, falls back to Groq Whisper if only `GROQ_API_KEY` is set.
 
 ### 3. Run
 ```bash
@@ -133,14 +147,13 @@ npm run dev      # development with auto-reload
 ### Heroku
 ```bash
 heroku create your-bot-name
-heroku addons:create mongolab:sandbox   # free MongoDB
+heroku addons:create mongolab:sandbox
 heroku config:set TELEGRAM_BOT_TOKEN=your_token   # repeat for all vars
 git push heroku main
 ```
 
 ### Render
-- Connect GitHub repo → Render auto-reads `render.yaml`
-- Set env vars in Render dashboard → deploy
+Connect GitHub repo → Render auto-reads `render.yaml` → set env vars → deploy.
 
 ### Docker
 ```bash
@@ -159,43 +172,85 @@ pm2 save && pm2 startup
 
 ## 📱 Telegram Commands
 
+> In **groups**, use `/nexus <query>` to chat. All other text is ignored.  
+> In **DMs**, send any text directly.
+
 | Command | Description |
 |---|---|
-| `/start` | Welcome, onboarding |
+| `/nexus <query>` | **Chat with AI — works in groups and DMs** |
+| `/start` | Welcome message + status |
 | `/help` | Full command reference |
-| `/model` | Switch AI provider & model |
-| `/persona` | Set AI personality |
+| `/model` | Switch AI provider & model (inline menu) |
+| `/persona` | Set AI personality (12 options) |
 | `/system <prompt>` | Set custom system instruction |
 | `/temp <0.0–2.0>` | Adjust response randomness |
+| `/tokens <100–8000>` | Set max response tokens |
 | `/new` | Start fresh conversation |
 | `/clear` | Clear context history |
 | `/summarize` | Summarize current chat |
-| `/export [json]` | Download conversation |
+| `/export [json]` | Download conversation as Markdown or JSON |
 | `/translate <lang> <text>` | Translate text |
 | `/image <prompt>` | Generate image |
-| `/remind <time> <message>` | Set reminder |
+| `/imgprovider` | Switch image generation provider |
+| `/remind <time> <message>` | Set reminder (`in 30 minutes`, `tomorrow 9am`) |
 | `/reminders` | List upcoming reminders |
 | `/note <text>` | Save a note |
 | `/notes` | View saved notes |
-| `/stats` | Usage statistics |
-| `/settings` | Settings menu |
+| `/stats` | Usage stats + token balance |
+| `/settings` | Settings menu (inline) |
 | `/feedback <text>` | Send feedback |
-| `/referral` | Referral link & code |
 
-**Admin only:** `/broadcast`, `/ban`, `/unban`
+**Owner only:** `/auth <id> [tokens]`, `/deauth <id>`, `/addtokens <id> <amount>`, `/authed`, `/broadcast <msg>`, `/ban <id>`, `/unban <id>`
 
-**Also works:** Send photos (vision), voice messages (transcription), documents (file analysis).
+**Also works:** send photos (vision analysis), voice messages (transcription → AI reply), video notes (transcription → AI reply), documents (PDF/DOCX/TXT/CSV/JSON/code analysis).
 
 ---
 
 ## 🎮 Discord Slash Commands
 
-All features available as slash commands: `/chat`, `/ask`, `/model`, `/persona`, `/system`, `/temp`, `/new`, `/clear`, `/summarize`, `/export`, `/translate`, `/image`, `/remind`, `/reminders`, `/note`, `/notes`, `/stats`, `/settings`, `/feedback`, `/help`.
+> In **servers**, use `/nexus <query>` or any slash command. Plain messages ignored unless you @mention the bot.  
+> In **DMs** and **@mentions**, bot always responds.
 
-Bot also responds to:
-- **@mentions** in any channel
-- **DMs** (always active)
-- Any channel named `#ai-*` or `#chat-*` (auto-detected)
+| Command | Description |
+|---|---|
+| `/nexus <query>` | **Chat with AI — works in any channel** |
+| `/chat <message>` | Chat with conversation context |
+| `/ask <question>` | Single question, no context |
+| `/model` | Switch AI provider/model (select menu) |
+| `/persona` | Set AI personality |
+| `/system <prompt>` | Set custom system prompt |
+| `/temp <value>` | Set temperature 0.0–2.0 |
+| `/new` | Start new conversation |
+| `/clear` | Clear history |
+| `/summarize` | Summarize conversation |
+| `/export [format]` | Export as Markdown or JSON file |
+| `/image <prompt> [provider]` | Generate image |
+| `/translate <language> <text>` | Translate text |
+| `/remind <time> <message>` | Set reminder |
+| `/reminders` | List reminders |
+| `/note <content>` | Save note |
+| `/notes` | View notes |
+| `/stats` | Usage statistics |
+| `/settings` | Settings (buttons) |
+| `/feedback <message>` | Send feedback |
+| `/help` | Show help |
+
+**Owner only:** `/authorize <user_id> [tokens]`, `/deauthorize <user_id>`, `/addtokens <user_id> <amount>`, `/authed`
+
+**Also works via @mention or DM:** attach images (vision analysis), audio/voice messages (transcription → AI reply), files (PDF/DOCX/TXT/CSV/JSON/code analysis).
+
+---
+
+## 🖼️ Vision Provider Fallback
+
+Image analysis tries providers in this order:
+1. User's configured provider (if vision-capable)
+2. OpenAI (`gpt-4o`)
+3. Grok (`grok-2-vision-1212`)
+4. Google Gemini (`gemini-1.5-flash`)
+5. Anthropic Claude (`claude-haiku-4-5`)
+
+At least one of `OPENAI_API_KEY`, `GOOGLE_AI_API_KEY`, `ANTHROPIC_API_KEY`, or `GROK_API_KEY` required for vision.
 
 ---
 
@@ -207,39 +262,36 @@ nexus-ai-bot/
 │   ├── index.js                  # Boot: DB + platforms + services
 │   ├── server.js                 # Express web server + admin API
 │   ├── handlers/
-│   │   ├── telegram.js           # Full Telegraf bot (commands, media, callbacks)
-│   │   └── discord.js            # Full Discord.js bot (slash, buttons, selects)
+│   │   ├── telegram.js           # Telegraf bot — commands, media, callbacks
+│   │   └── discord.js            # Discord.js bot — slash, buttons, selects, media
 │   ├── services/
-│   │   ├── AIService.js          # Unified abstraction over 12 providers
-│   │   ├── ContextService.js     # Conversation history + summarize + export
-│   │   ├── UserService.js        # User CRUD, plans, stats, memory
-│   │   └── ReminderService.js    # node-cron scheduler, natural lang parser
+│   │   ├── AIService.js          # Unified abstraction over 12+ providers
+│   │   ├── ContextService.js     # Conversation history, summarize, export
+│   │   ├── UserService.js        # User CRUD, token balance, stats, memory
+│   │   └── ReminderService.js    # node-cron scheduler, natural language parser
 │   ├── models/
-│   │   ├── User.js               # Mongoose user schema + plan logic
-│   │   └── index.js              # Conversation, Reminder, Note, Analytics, Feedback
+│   │   ├── User.js               # Mongoose user schema + access logic
+│   │   └── index.js              # Conversation, Reminder, Note, Feedback
 │   └── utils/
 │       ├── logger.js             # Winston structured logging
 │       ├── formatter.js          # Text chunking, escaping, truncation
-│       ├── imageUtils.js         # Vision (GPT-4o) + DALL-E 3 generation
-│       ├── audioUtils.js         # Whisper transcription
-│       └── fileUtils.js          # PDF (pdf-parse), DOCX (mammoth) extraction
+│       ├── imageUtils.js         # Vision: OpenAI / Grok / Google / Anthropic
+│       ├── audioUtils.js         # Whisper transcription: OpenAI + Groq fallback
+│       └── fileUtils.js          # PDF (pdf-parse), DOCX (mammoth), CSV, JSON
 ├── config/
 │   └── index.js                  # Central config from env vars
 ├── public/
-│   └── dashboard.html            # Admin status dashboard (dark, premium UI)
-├── .env.example                  # All env vars documented
-├── .gitignore
+│   └── dashboard.html            # Admin status dashboard
+├── .env.example
 ├── Procfile                      # Heroku
 ├── railway.json                  # Railway
 ├── render.yaml                   # Render
-└── Dockerfile                    # Docker + healthcheck
+└── Dockerfile
 ```
 
 ---
 
 ## 🔧 Configuration Reference
-
-Key `.env` variables:
 
 | Variable | Required | Description |
 |---|:---:|---|
@@ -247,22 +299,29 @@ Key `.env` variables:
 | `DISCORD_BOT_TOKEN` | ✅ | Discord Developer Portal |
 | `DISCORD_CLIENT_ID` | ✅ | Discord Developer Portal, Application ID |
 | `MONGODB_URI` | ✅ | MongoDB connection string |
+| `BOT_OWNER_ID` | ✅ | Telegram numeric user ID (admin commands) |
+| `DISCORD_OWNER_ID` | ✅ | Discord numeric user ID (admin commands) |
 | `DEFAULT_PROVIDER` | — | Default AI provider (default: `groq`) |
 | `DEFAULT_MODEL` | — | Default model (default: `llama-3.3-70b-versatile`) |
 | `IMAGE_GEN_PROVIDER` | — | Default image provider (default: `stability`) |
-| `FREE_DAILY_MESSAGES` | — | Daily limit for free users (default: `50`) |
-| `PRO_DAILY_MESSAGES` | — | Daily limit for Pro (default: `1000`) |
-| `BOT_OWNER_ID` | — | Telegram ID for admin commands |
-| `DISCORD_OWNER_ID` | — | Discord ID for admin commands |
-| `TELEGRAM_API_ID` | — | MTProto userbot (optional, from my.telegram.org) |
-| `TELEGRAM_API_HASH` | — | MTProto userbot (optional) |
-| `TELEGRAM_SESSION_STRING` | — | MTProto session (optional) |
+| `DEFAULT_TOKEN_GRANT` | — | Tokens granted on `/auth` (default: `5000`) |
+| `GROQ_API_KEY` | — | Free at console.groq.com — default provider + Whisper fallback |
+| `OPENAI_API_KEY` | — | OpenAI GPT + Whisper transcription |
+| `ANTHROPIC_API_KEY` | — | Claude models + vision |
+| `GOOGLE_AI_API_KEY` | — | Gemini models + vision |
+| `GROK_API_KEY` | — | Grok models + vision |
+| `STABILITY_API_KEY` | — | Stability AI image generation |
+| `TOGETHER_API_KEY` | — | Together AI models + FLUX images |
+| `MISTRAL_API_KEY` | — | Mistral models |
+| `DEEPSEEK_API_KEY` | — | DeepSeek models |
+| `PERPLEXITY_API_KEY` | — | Perplexity Sonar (web search) |
+| `HUGGINGFACE_API_KEY` | — | HuggingFace models + images |
+| `COHERE_API_KEY` | — | Cohere Command models |
+| `NVIDIA_API_KEY` | — | NVIDIA NIM models |
 | `ENABLE_TELEGRAM` | — | Set `false` to disable (default: `true`) |
 | `ENABLE_DISCORD` | — | Set `false` to disable (default: `true`) |
-| `JWT_SECRET` | — | Secret for web dashboard auth |
 | `LOG_LEVEL` | — | Winston log level (default: `info`) |
-
-See `.env.example` for full list.
+| `JWT_SECRET` | — | Secret for web dashboard auth |
 
 ---
 

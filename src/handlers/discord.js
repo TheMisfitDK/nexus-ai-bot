@@ -557,10 +557,17 @@ class DiscordBot {
     const userId = `discord:${interaction.user.id}`;
     if (interaction.customId === 'sel_provider') {
       const provider = interaction.values[0];
-      const models = aiService.getModelsForProvider(provider);
-      const select = new StringSelectMenuBuilder().setCustomId(`sel_model_${provider}`).setPlaceholder('Choose model')
-        .addOptions(models.map(m => ({ label: m, value: `${provider}||${m}` })));
-      await interaction.update({ content: `Select model for ${provider.toUpperCase()}:`, components: [new ActionRowBuilder().addComponents(select)] });
+      await interaction.deferUpdate();
+      const models = await aiService.getModelsForProviderLive(provider);
+      if (!models.length) {
+        await interaction.editReply({ content: `❌ No models found for ${provider}. Check API key.`, components: [] });
+        return;
+      }
+      // Discord select menus cap at 25 options
+      const capped = models.slice(0, 25);
+      const select = new StringSelectMenuBuilder().setCustomId(`sel_model_${provider}`).setPlaceholder(`Choose model (${models.length} available)`)
+        .addOptions(capped.map(m => ({ label: m.slice(0, 100), value: `${provider}||${m}` })));
+      await interaction.editReply({ content: `🧠 **${provider.toUpperCase()}** — ${models.length} live models (showing ${capped.length}):`, components: [new ActionRowBuilder().addComponents(select)] });
     } else if (interaction.customId.startsWith('sel_model_')) {
       const [provider, model] = interaction.values[0].split('||');
       await userService.setProvider(userId, provider, model);

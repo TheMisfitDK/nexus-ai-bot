@@ -748,14 +748,18 @@ class TelegramBot {
 
     bot.action(/^prov:(.+)$/, async (ctx) => {
       const provider = ctx.match[1];
-      const models = aiService.getModelsForProvider(provider);
-      if (!models.length) return ctx.answerCbQuery('No models available');
-      const buttons = models.map(m => [Markup.button.callback(`${m}`, `mdl:${provider}:${m}`)]);
+      await ctx.answerCbQuery('⏳ Fetching live models...');
+      await ctx.editMessageText(`⏳ Fetching models for *${provider.toUpperCase()}*...`, { parse_mode: 'Markdown' });
+      const models = await aiService.getModelsForProviderLive(provider);
+      if (!models.length) {
+        await ctx.editMessageText(`❌ No models found for ${provider}. Check API key.`);
+        return;
+      }
+      const buttons = models.map(m => [Markup.button.callback(m, `mdl:${provider}:${m}`)]);
       buttons.push([Markup.button.callback('⬅️ Back', 'back:model')]);
-      await ctx.editMessageText(`🧠 *Select model for ${provider.toUpperCase()}:*`, {
+      await ctx.editMessageText(`🧠 *${provider.toUpperCase()} — ${models.length} models:*`, {
         parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons),
       });
-      await ctx.answerCbQuery();
     });
 
     bot.action(/^mdl:(.+):(.+)$/, async (ctx) => {

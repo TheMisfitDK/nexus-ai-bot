@@ -81,6 +81,7 @@ class DiscordBot {
       new SlashCommandBuilder().setName('persona').setDescription('Set AI persona'),
       new SlashCommandBuilder().setName('system').setDescription('Set system prompt')
         .addStringOption(o => o.setName('prompt').setDescription('System prompt').setRequired(true)),
+      new SlashCommandBuilder().setName('systemclr').setDescription('Clear system prompt'),
       new SlashCommandBuilder().setName('temp').setDescription('Set temperature 0.0-2.0')
         .addNumberOption(o => o.setName('value').setDescription('Temperature').setRequired(true).setMinValue(0).setMaxValue(2)),
       new SlashCommandBuilder().setName('new').setDescription('Start new conversation'),
@@ -389,6 +390,10 @@ class DiscordBot {
       await userService.setSystemPrompt(userId, interaction.options.getString('prompt'));
       await interaction.reply({ content: '✅ System prompt set!', ephemeral: true });
 
+    } else if (cmd === 'systemclr') {
+      await userService.setSystemPrompt(userId, '');
+      await interaction.reply({ content: '🗑️ System prompt cleared.', ephemeral: true });
+
     } else if (cmd === 'temp') {
       await userService.update(userId, { temperature: interaction.options.getNumber('value') });
       await interaction.reply({ content: `🌡️ Temperature set to ${interaction.options.getNumber('value')}`, ephemeral: true });
@@ -524,7 +529,7 @@ class DiscordBot {
         .addFields(
           { name: '⚡ Primary', value: '`/nexus <question>` — chat from any channel' },
           { name: '💬 Chat', value: '`/chat` `/ask` `/new` `/clear` `/summarize` `/export`' },
-          { name: '🤖 AI', value: '`/model` `/persona` `/system` `/temp`' },
+          { name: '🤖 AI', value: '`/model` `/persona` `/system` `/systemclr` `/temp`' },
           { name: '🛠️ Tools', value: '`/image` `/translate` `/remind` `/reminders`' },
           { name: '📝 Notes', value: '`/note` `/notes`' },
           { name: '📊 Account', value: '`/stats` `/settings` `/feedback`' },

@@ -746,6 +746,32 @@ class TelegramBot {
 
     bot.action('cancel', ctx => ctx.deleteMessage().catch(() => {}));
 
+    // How many model buttons to show per page.
+    // Telegram's inline keyboard payload must stay under ~64 KB;
+    // each button callback_data can be up to 64 bytes.  25 rows × 1 col
+    // is a safe universal limit that keeps latency low too.
+    const MODELS_PER_PAGE = 25;
+
+    // Helper: render one page of the model picker
+    async function sendModelPage(ctx, provider, models, page) {
+      const totalPages = Math.ceil(models.length / MODELS_PER_PAGE);
+      const slice = models.slice(page * MODELS_PER_PAGE, (page + 1) * MODELS_PER_PAGE);
+      const buttons = slice.map(m => [Markup.button.callback(m, `mdl:${provider}:${m}`)]);
+
+      // Pagination row
+      const nav = [];
+      if (page > 0)             nav.push(Markup.button.callback('◀️ Prev', `mpg:${provider}:${page - 1}`));
+      if (page < totalPages - 1) nav.push(Markup.button.callback('Next ▶️', `mpg:${provider}:${page + 1}`));
+      if (nav.length) buttons.push(nav);
+      buttons.push([Markup.button.callback('⬅️ Back', 'back:model')]);
+
+      const header = totalPages > 1
+        ? `🧠 *${provider.toUpperCase()}* — page ${page + 1}/${totalPages} (${models.length} models):`
+        : `🧠 *${provider.toUpperCase()} — ${models.length} models:*`;
+
+      await ctx.editMessageText(header, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+    }
+
     bot.action(/^prov:(.+)$/, async (ctx) => {
       const provider = ctx.match[1];
       await ctx.answerCbQuery('⏳ Fetching live models...');
@@ -755,11 +781,20 @@ class TelegramBot {
         await ctx.editMessageText(`❌ No models found for ${provider}. Check API key.`);
         return;
       }
-      const buttons = models.map(m => [Markup.button.callback(m, `mdl:${provider}:${m}`)]);
-      buttons.push([Markup.button.callback('⬅️ Back', 'back:model')]);
-      await ctx.editMessageText(`🧠 *${provider.toUpperCase()} — ${models.length} models:*`, {
-        parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons),
-      });
+      await sendModelPage(ctx, provider, models, 0);
+    });
+
+    // Pagination navigation
+    bot.action(/^mpg:([^:]+):(\d+)$/, async (ctx) => {
+      const provider = ctx.match[1];
+      const page = parseInt(ctx.match[2], 10);
+      await ctx.answerCbQuery();
+      const models = await aiService.getModelsForProviderLive(provider);
+      if (!models.length) {
+        await ctx.editMessageText(`❌ No models found for ${provider}.`);
+        return;
+      }
+      await sendModelPage(ctx, provider, models, page);
     });
 
     bot.action(/^mdl:(.+):(.+)$/, async (ctx) => {

@@ -174,7 +174,7 @@ class AIService {
     const client = this.clients.google;
     if (!client) throw new Error('Google AI not configured.');
     const genModel = client.getGenerativeModel({ model });
-    const systemMsg = messages.find(m => m.role === 'system')?.content || '';
+    const systemMsg = (messages.find(m => m.role === 'system')?.content || '').trim();
     const chatMsgs = messages.filter(m => m.role !== 'system');
     const history = chatMsgs.slice(0, -1).map(m => ({
       role: m.role === 'assistant' ? 'model' : 'user',
@@ -183,7 +183,8 @@ class AIService {
     const chat = genModel.startChat({
       history,
       generationConfig: { maxOutputTokens: maxTokens, temperature },
-      ...(systemMsg ? { systemInstruction: systemMsg } : {}),
+      // Google requires Content object — plain string causes 400 Bad Request
+      ...(systemMsg ? { systemInstruction: { parts: [{ text: systemMsg }] } } : {}),
     });
     const lastMsg = chatMsgs[chatMsgs.length - 1]?.content || '';
     if (stream && onToken) {
@@ -268,3 +269,4 @@ class AIService {
 }
 
 module.exports = new AIService();
+  

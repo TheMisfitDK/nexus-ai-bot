@@ -5,6 +5,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const axios = require('axios');
 const config = require('../../config');
 const logger = require('../utils/logger');
+const modelRegistry = require('../utils/modelRegistry');
 
 class AIService {
   constructor() {
@@ -248,7 +249,12 @@ class AIService {
   }
 
   getAvailableProviders() { return Object.keys(this.clients); }
-  getModelsForProvider(p) { return config.ai.providers[p]?.models || []; }
+  /** Sync — returns cached live models (or static fallback). Safe for menus. */
+  getModelsForProvider(p) { return modelRegistry.getCached(p); }
+  /** Async — fetches live models from provider API, updates cache. */
+  async getModelsForProviderLive(p) { return modelRegistry.getModels(p); }
+  /** Refresh all provider model lists in background. Call once on boot. */
+  async refreshModels() { return modelRegistry.refreshAll(); }
   isFreeProvider(p) { return config.ai.providers[p]?.free || false; }
   isConfigured(p) { return !!this.clients[p]; }
 

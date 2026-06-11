@@ -85,6 +85,10 @@ async function main() {
   // Start reminder service
   reminderService.start();
 
+  // Warm model registry cache in background (non-blocking)
+  const aiService = require('./services/AIService');
+  aiService.refreshModels().catch(e => logger.warn(`Model refresh error: ${e.message}`));
+
   logger.info('🌟 NexusAI Bot fully operational!');
 }
 
